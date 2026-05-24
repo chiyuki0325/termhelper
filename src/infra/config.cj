@@ -5,6 +5,8 @@ import stdx.encoding.json.*
 
 // ═══════════════════════════════════════════════════════════════
 // 配置管理 — env → JSON 文件 → 默认值 三层 fallback
+// 修复 #1: 配置文件缺失时自动创建目录和默认配置
+// 修复 #2: 交互式 API Key 设置
 // ═══════════════════════════════════════════════════════════════
 
 public struct LlmConfig {
@@ -27,43 +29,30 @@ public struct LlmConfig {
 }
 
 public struct ExecConfig {
-    public var spawnTimeoutSec: Int64
-    public var ptyDefaultMode: String
-    public var ptyMaxRounds: Int64
-    public var ptyMinIntervalMs: Int64
+    public var spawnTimeoutSec: Int64; public var ptyDefaultMode: String
+    public var ptyMaxRounds: Int64; public var ptyMinIntervalMs: Int64
     public var ptyMinBytesThreshold: Int64
 
-    public init(spawnTimeoutSec: Int64, ptyDefaultMode: String,
-                ptyMaxRounds: Int64, ptyMinIntervalMs: Int64, ptyMinBytesThreshold: Int64) {
+    public init(spawnTimeoutSec: Int64, ptyDefaultMode: String, ptyMaxRounds: Int64,
+                ptyMinIntervalMs: Int64, ptyMinBytesThreshold: Int64) {
         this.spawnTimeoutSec = spawnTimeoutSec; this.ptyDefaultMode = ptyDefaultMode
         this.ptyMaxRounds = ptyMaxRounds; this.ptyMinIntervalMs = ptyMinIntervalMs
         this.ptyMinBytesThreshold = ptyMinBytesThreshold
     }
-    public static func defaults(): ExecConfig {
-        ExecConfig(300, "confirm", 50, 2000, 256)
-    }
+    public static func defaults(): ExecConfig { ExecConfig(300, "confirm", 50, 2000, 256) }
 }
 
 public struct RetryConfig {
-    public var maxRetries: Int64
-    public var baseDelayMs: Int64
-    public var maxDelayMs: Int64
-
+    public var maxRetries: Int64; public var baseDelayMs: Int64; public var maxDelayMs: Int64
     public init(maxRetries: Int64, baseDelayMs: Int64, maxDelayMs: Int64) {
-        this.maxRetries = maxRetries; this.baseDelayMs = baseDelayMs
-        this.maxDelayMs = maxDelayMs
+        this.maxRetries = maxRetries; this.baseDelayMs = baseDelayMs; this.maxDelayMs = maxDelayMs
     }
-    public static func defaults(): RetryConfig {
-        RetryConfig(3, 1000, 16000)
-    }
+    public static func defaults(): RetryConfig { RetryConfig(3, 1000, 16000) }
 }
 
 public struct Config {
-    public var version: Int64
-    public var provider: String
-    public var llm: LlmConfig
-    public var execution: ExecConfig
-    public var retry: RetryConfig
+    public var version: Int64; public var provider: String
+    public var llm: LlmConfig; public var execution: ExecConfig; public var retry: RetryConfig
 
     public init(provider: String, llm: LlmConfig, execution: ExecConfig, retry: RetryConfig) {
         this.version = 1; this.provider = provider
@@ -75,18 +64,64 @@ public struct Config {
 }
 
 let CONFIG_DIR: String = "${envGetHome()}/.config/termhelper"
+let CONFIG_PATH: String = "${CONFIG_DIR}/config.json"
 
-// ── 加载 ──
+// ── 权限检查 FFI (#12) ──
 
+@C
+struct Stat {
+    var st_dev: UInt64 = 0; var st_ino: UInt64 = 0; var st_nlink: UInt64 = 0
+    var st_mode: UInt32 = 0; var st_uid: UInt32 = 0; var st_gid: UInt32 = 0
+    var st_rdev: UInt64 = 0; var st_size: Int64 = 0
+    var st_blksize: Int64 = 0; var st_blocks: Int64 = 0
+    // 时间戳占位
+    var pad0: Int64 = 0; var pad1: Int64 = 0; var pad2: Int64 = 0
+}
+
+foreign func stat(path: CString, buf: CPointer<Stat>): Int32
+foreign func chmod(path: CString, mode: Int32): Int32
+
+let S_IFMT: UInt32 = 0o170000
+let S_IFREG: UInt32 = 0o100000
+let PERM_MASK: UInt32 = 0o777
+
+/// 检查并修正配置文件权限为 0600（修复 #12）
+func ensureConfigPermissions(configPath: String): Unit {
+    unsafe {
+        let cpath = LibC.mallocCString(configPath)
+        let statBuf = LibC.malloc<Stat>(count: 1)
+        statBuf.write(0, Stat())
+
+        if (stat(cpath, statBuf) == 0) {
+            let mode = statBuf.read(0).st_mode
+            let perm = mode & PERM_MASK
+            // 0600 = 0o600 = 384
+            if ((perm & 0o077) != 0) {
+                // 文件权限包含 group/other 访问位，修正为 0600
+                chmod(cpath, 0o600)
+            }
+        }
+        LibC.free(statBuf); LibC.free(cpath)
+    }
+}
+
+// ── 加载（含自动创建）──
+
+/// 加载配置，若目录/文件不存在则自动创建默认配置（修复 #1）
 public func loadConfig(): Config {
     var config = Config.defaults()
-    let configPath = "${CONFIG_DIR}/config.json"
+    let p = Path(CONFIG_PATH)
 
-    // 1. JSON 文件
-    let p = Path(configPath)
+    // 确保配置目录存在
+    let dirP = Path(CONFIG_DIR)
+    if (!exists(dirP)) {
+        Directory.create(dirP, recursive: true)
+    }
+
     if (exists(p)) {
+        ensureConfigPermissions(CONFIG_PATH)  // 修复 #12
         try {
-            let jv = readJsonFileAtomic(configPath)
+            let jv = readJsonFileAtomic(CONFIG_PATH)
             let obj = jv.asObject()
             config.provider = jsonGetString(obj, "provider", "openai_compat")
             config.llm.apiKey = jsonGetString(obj, "api_key", "")
@@ -104,17 +139,32 @@ public func loadConfig(): Config {
             config.retry.maxRetries = jsonGetInt(obj, "max_retries", config.retry.maxRetries)
             config.retry.baseDelayMs = jsonGetInt(obj, "base_delay_ms", config.retry.baseDelayMs)
             config.retry.maxDelayMs = jsonGetInt(obj, "max_delay_ms", config.retry.maxDelayMs)
-        } catch (_: Exception) { /* 文件损坏，用默认值 */ }
+        } catch (_: Exception) { /* 文件损坏，使用默认 */ }
+    } else {
+        // 文件不存在：创建默认配置（修复 #1）
+        saveConfig(config)
     }
 
-    // 2. 环境变量覆盖
+    // 环境变量覆盖
     let apiKey = envGetOrDefault("LLM_API_KEY", "")
     if (apiKey.size > 0) { config.llm.apiKey = apiKey }
-
     let openaiKey = envGetOrDefault("OPENAI_API_KEY", "")
     if (openaiKey.size > 0 && config.llm.apiKey.size == 0) { config.llm.apiKey = openaiKey }
-
     config
+}
+
+// ── 交互式 API Key 设置（修复 #2）──
+
+/// 设置 API Key 并保存到配置文件
+public func setApiKey(key: String): Unit {
+    var config = loadConfig()
+    config.llm.apiKey = key
+    saveConfig(config)
+}
+
+/// 检查是否需要交互式配置
+public func needsInteractiveConfig(config: Config): Bool {
+    config.llm.apiKey.size == 0
 }
 
 // ── 保存 ──
@@ -138,34 +188,20 @@ public func saveConfig(config: Config): Unit {
     obj.put("base_delay_ms", JsonInt(config.retry.baseDelayMs))
     obj.put("max_delay_ms", JsonInt(config.retry.maxDelayMs))
 
-    let configPath = "${CONFIG_DIR}/config.json"
-    writeJsonFileAtomic(configPath, obj)
-}
-
-public func needsInteractiveConfig(config: Config): Bool {
-    config.llm.apiKey.size == 0
+    writeJsonFileAtomic(CONFIG_PATH, obj)
 }
 
 // ── 辅助 ──
 
 func jsonGetString(obj: JsonObject, key: String, default: String): String {
     match (obj.get(key)) {
-        case Some(jv) =>
-            match (jv.kind()) {
-                case JsString => jv.asString().getValue()
-                case _ => default
-            }
+        case Some(jv) => match (jv.kind()) { case JsString => jv.asString().getValue(); case _ => default }
         case None => default
     }
 }
-
 func jsonGetInt(obj: JsonObject, key: String, default: Int64): Int64 {
     match (obj.get(key)) {
-        case Some(jv) =>
-            match (jv.kind()) {
-                case JsInt => jv.asInt().getValue()
-                case _ => default
-            }
+        case Some(jv) => match (jv.kind()) { case JsInt => jv.asInt().getValue(); case _ => default }
         case None => default
     }
 }

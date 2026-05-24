@@ -7,12 +7,13 @@ package termhelper.infra
 
 import std.collection.*
 
-// ── ioctl 常量（musl pty.c）──
+// ── ioctl 常量（aarch64 Linux 正确值）──
+// T=0x54, _IOC_READ=0x80000000, _IOC_WRITE=0x40000000
 
-let TIOCGPTN: Int64 = 0x00005430    // 获取 pty 编号
-let TIOCSPTLCK: Int64 = 0x40045431 // 设置/清除 pty 锁
-let TIOCSWINSZ: Int64 = 0x5414     // 设置终端窗口大小
-let TIOCGWINSZ: Int64 = 0x5413     // 获取终端窗口大小
+let TIOCGPTN: Int64 = 0x80045430    // _IOR('T', 0x30, int) — 获取 pty 编号
+let TIOCSPTLCK: Int64 = 0x40045431 // _IOW('T', 0x31, int) — 设置/清除 pty 锁
+let TIOCSWINSZ: Int64 = 0x40085434 // _IOW('T', 0x34, winsize) — 设置终端窗口大小
+let TIOCGWINSZ: Int64 = 0x80085435 // _IOR('T', 0x35, winsize) — 获取终端窗口大小
 
 // ── fcntl 常量 ──
 
@@ -99,12 +100,9 @@ public class Pty {
             }
             let slavePath = "/dev/pts/${ptyNum}"
 
-            // 5. 设置终端大小
+            // 5. 设置终端大小（非致命）
             var ws = Winsize(rows, cols)
-            if (ioctl(mfd, TIOCSWINSZ, inout ws) < 0) {
-                close(mfd)
-                return None
-            }
+            ioctl(mfd, TIOCSWINSZ, inout ws)  // 忽略返回值
 
             // 6. 设置非阻塞
             let flags = fcntl(mfd, F_GETFL)

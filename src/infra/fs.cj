@@ -59,6 +59,52 @@ public func readJsonFileAtomic(dataPath: String): JsonValue {
     }
 }
 
+/// 读-修改-写 JSON（全程排他锁，修复 TOCTOU #5）
+/// modifier 在锁保护内执行，确保读取和写入之间不被其他进程打断
+public func readModifyWriteJson(dataPath: String, modifier: (JsonObject) -> JsonObject): Unit {
+    ensureParentDir(dataPath)
+    let lockPath = "${dataPath}.lock"
+    unsafe {
+        let cpath = LibC.mallocCString(lockPath)
+        let lockFd = open(cpath, O_CREAT | O_WRONLY, 0o600)
+        LibC.free(cpath)
+        if (lockFd < 0) { throw Exception("无法创建锁文件: ${lockPath}") }
+        flock(lockFd, LOCK_EX)  // ─── 锁开始 ───
+
+        // 1. 读取
+        var obj = JsonObject()
+        let dataP = Path(dataPath)
+        if (exists(dataP)) {
+            let dpath = LibC.mallocCString(dataPath)
+            let dataFd = open(dpath, O_RDONLY, 0)
+            LibC.free(dpath)
+            if (dataFd >= 0) {
+                let content = fdReadAll(dataFd)
+                close(dataFd)
+                obj = try { JsonValue.fromStr(content).asObject() } catch (_: Exception) { JsonObject() }
+            }
+        }
+
+        // 2. 修改
+        obj = modifier(obj)
+
+        // 3. 写回
+        let newContent = obj.toString()
+        let dpath = LibC.mallocCString(dataPath)
+        let dataFd = open(dpath, O_CREAT | O_WRONLY, 0o600)
+        LibC.free(dpath)
+        if (dataFd >= 0) {
+            ftruncate(dataFd, 0)
+            fdWriteAll(dataFd, newContent)
+            fsync(dataFd)
+            close(dataFd)
+        }
+
+        flock(lockFd, LOCK_UN)  // ─── 锁结束 ───
+        close(lockFd)
+    }
+}
+
 /// 带锁写入 JSON 文件（排他锁 + fsync）
 public func writeJsonFileAtomic(dataPath: String, value: JsonValue): Unit {
     ensureParentDir(dataPath)

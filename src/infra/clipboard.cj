@@ -4,54 +4,100 @@ import std.collection.*
 
 // ═══════════════════════════════════════════════════════════════
 // 剪贴板 — OSC 52 → Wayland (wl-copy) → X11 (xclip) → 降级展示
+// 修复 #12: 实现真正的外部工具调用
 // ═══════════════════════════════════════════════════════════════
 
-/// 剪贴板写入结果
 public enum ClipResult {
     | Ok
-    | Unsupported(String)  // 所有方式均不可用，返回错误描述
+    | Unsupported(String)
 }
 
 /// 复制文本到剪贴板
-/// 策略：1. 检测终端 OSC 52 支持 → 输出转义序列
-///       2. 检测 Wayland → 调用 wl-copy
-///       3. 检测 X11 → 调用 xclip
-///       4. 降级：返回 Unsupported
 public func copyToClipboard(text: String): ClipResult {
-    // 1. 尝试 OSC 52 转义序列（大多数现代终端支持）
-    let encoded = base64Encode(text)
-    // OSC 52 序列：\e]52;c;<base64>\e\\
+    // 1. 输出 OSC 52 序列（大多数现代终端支持）
     let esc = String(Rune(27))
-    let oscSeq = "${esc}]52;c;${encoded}${esc}\\"
-    // 输出 OSC 52 序列到终端
-    println(oscSeq)
+    let encoded = base64Encode(text)
+    println("${esc}]52;c;${encoded}${esc}\\")
 
-    // 2. 检测 Wayland
+    // 2. 尝试 Wayland wl-copy
     let waylandDisplay = envGetOrDefault("WAYLAND_DISPLAY", "")
     if (waylandDisplay.size > 0) {
         return tryWlCopy(text)
     }
 
-    // 3. 检测 X11
+    // 3. 尝试 X11 xclip
     let xdgType = envGetOrDefault("XDG_SESSION_TYPE", "")
     if (xdgType == "x11") {
         return tryXclip(text)
     }
 
-    // OSC 52 可能已成功，无法确认
+    // OSC 52 可能已成功（无法确认）
     ClipResult.Ok
 }
 
-/// 尝试 wl-copy
+/// 实际调用 wl-copy（管道 stdin，无 shell 注入风险 #8）
 func tryWlCopy(text: String): ClipResult {
-    // spawn 调用 wl-copy（阶段 3 实现）
-    // 此时仅验证工具存在性
-    ClipResult.Ok
+    let ok = pipeTextToCommand(text, "/usr/bin/wl-copy", ArrayList<String>())
+    if (ok) { ClipResult.Ok } else { ClipResult.Unsupported("wl-copy 执行失败") }
 }
 
-/// 尝试 xclip
+/// 实际调用 xclip（管道 stdin，无 shell 注入风险 #8）
 func tryXclip(text: String): ClipResult {
-    ClipResult.Ok
+    let args = ArrayList<String>()
+    args.add("-selection"); args.add("clipboard")
+    let ok = pipeTextToCommand(text, "/usr/bin/xclip", args)
+    if (ok) { ClipResult.Ok } else { ClipResult.Unsupported("xclip 执行失败") }
+}
+
+// ── 管道写入工具（修复 #8 命令注入）──
+
+/// 将文本通过管道写入命令的 stdin，无 shell 介入
+func pipeTextToCommand(text: String, cmdPath: String, args: ArrayList<String>): Bool {
+    unsafe {
+        let fds = LibC.malloc<Int32>(count: 2)
+        if (pipe(fds) < 0) { LibC.free(fds); return false }
+        let readFd = fds.read(0); let writeFd = fds.read(1)
+
+        let pid = fork()
+        if (pid < 0) { LibC.free(fds); return false }
+
+        if (pid == 0) {
+            close(writeFd)
+            dup2(readFd, 0)
+            close(readFd)
+
+            // 构造 argv
+            let argv = LibC.malloc<CPointer<Int8>>(count: args.size + 2)
+            let cmdCStr = LibC.mallocCString(cmdPath)
+            argv.write(0, CPointer<Int8>(cmdCStr.getChars()))
+            for (i in 0..args.size) {
+                let argCStr = LibC.mallocCString(args[i])
+                argv.write(i + 1, CPointer<Int8>(argCStr.getChars()))
+            }
+            argv.write(args.size + 1, CPointer<Int8>())
+
+            execvp(cmdCStr, argv)
+            _exit(1)
+        }
+
+        // 父进程：写入 stdin
+        close(readFd)
+        let bytes = text.toArray()
+        let writeBuf = LibC.malloc<UInt8>(count: bytes.size)
+        for (i in 0..bytes.size) { writeBuf.write(i, bytes[i]) }
+        write(writeFd, writeBuf, UInt64(bytes.size))
+        LibC.free(writeBuf)
+        close(writeFd)
+
+        // 等待子进程
+        let statusPtr = LibC.malloc<Int32>(count: 1)
+        statusPtr.write(0, 0)
+        waitpid(pid, statusPtr, 0)
+        let rawStatus = statusPtr.read(0)
+        LibC.free(statusPtr); LibC.free(fds)
+
+        (rawStatus & 0x7F) == 0 && ((rawStatus >> 8) & 0xFF) == 0
+    }
 }
 
 /// 获取剪贴板安装提示
@@ -64,7 +110,23 @@ public func clipboardInstallHint(): String {
     }
 }
 
-// ── 简单的 Base64 编码（用于 OSC 52）──
+// ── Shell 转义辅助 ──
+
+func escapeForShell(s: String): String {
+    // 简单的单引号转义：将 ' 替换为 '\''
+    var result = ""
+    let bytes = s.toArray()
+    for (b in bytes) {
+        if (b == b'\'') {
+            result += "'\\''"
+        } else {
+            result += String(Rune(Int32(b)))
+        }
+    }
+    result
+}
+
+// ── Base64 编码 ──
 
 let B64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
@@ -92,8 +154,4 @@ func base64Encode(input: String): String {
     result
 }
 
-func charAt(s: String, idx: Int32): String {
-    let i = Int64(idx)
-    let ch = String(Rune(s[i]))
-    ch
-}
+func charAt(s: String, idx: Int32): String { String(Rune(s[Int64(idx)])) }
