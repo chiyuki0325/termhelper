@@ -2,6 +2,10 @@ package termhelper
 
 import termhelper.types.*
 import termhelper.tui.*
+import termhelper.infra.*
+import termhelper.adapters.*
+import termhelper.core.*
+import termhelper.util.*
 
 /// 程序入口
 /// 用法：
@@ -27,6 +31,12 @@ main(args: Array<String>): Int64 {
             case "--uninstall" =>
                 println("[阶段 1 占位] 卸载 Shell 集成")
                 return 0
+            case "--debug" =>
+                if (args.size < 2) {
+                    println("用法: termhelper --debug <查询>")
+                    return 1
+                }
+                return runDebug(joinArgsFrom(args, 1))
             case "--help" =>
                 printHelp()
                 return 0
@@ -69,6 +79,7 @@ func printHelp(): Unit {
     println("  termhelper <自然语言查询>    执行查询，启动全屏 TUI")
     println("  termhelper --install          安装 Shell 集成 (alias/def 写入 RC 文件)")
     println("  termhelper --uninstall        卸载 Shell 集成 (从 RC 文件移除)")
+    println("  termhelper --debug <查询>     CLI 调试模式，打印 LLMResponse JSON")
     println("  termhelper --help             打印此帮助信息")
     println()
     println("示例:")
@@ -78,12 +89,54 @@ func printHelp(): Unit {
 
 /// 将参数数组拼接为空格分隔的查询字符串
 func joinArgs(args: Array<String>): String {
+    joinArgsFrom(args, 0)
+}
+
+func joinArgsFrom(args: Array<String>, start: Int64): String {
     var result = ""
-    for (i in 0..args.size) {
-        if (i > 0) {
+    for (i in start..args.size) {
+        if (i > start) {
             result += " "
         }
         result += args[i]
     }
     result
+}
+
+func runDebug(query: String): Int64 {
+    let config = loadConfig()
+    if (needsInteractiveConfig(config)) {
+        println("缺少 LLM API Key。请设置 LLM_API_KEY / OPENAI_API_KEY，或写入 ~/.config/termhelper/config.json。")
+        return 1
+    }
+
+    let ctxManager = ContextManager()
+    let ctx = ctxManager.load()
+    let provider = createProvider(config)
+    let session = Session(provider, config, ctx)
+    let response = session.start(query)
+    println(llmResponseToJsonString(response))
+    return 0
+}
+
+func createProvider(config: Config): LLMProvider {
+    let providerName = config.provider
+    let baseUrl = providerBaseUrl(providerName, config.llm.baseUrl)
+    if (providerName == "anthropic") {
+        LLMProvider.fromAnthropic(AnthropicProvider(baseUrl, config.llm.apiKey, config.llm.model, config.llm.timeoutSec))
+    } else if (providerName == "google") {
+        LLMProvider.fromGoogle(GoogleProvider(baseUrl, config.llm.apiKey, config.llm.model, config.llm.timeoutSec))
+    } else {
+        LLMProvider.fromOpenAI(OpenAICompatProvider(baseUrl, config.llm.apiKey, config.llm.model, config.llm.timeoutSec))
+    }
+}
+
+func providerBaseUrl(provider: String, configured: String): String {
+    if (provider == "anthropic" && configured == "https://api.openai.com/v1") {
+        "https://api.anthropic.com/v1"
+    } else if (provider == "google" && configured == "https://api.openai.com/v1") {
+        "https://generativelanguage.googleapis.com/v1beta"
+    } else {
+        configured
+    }
 }

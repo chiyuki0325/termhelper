@@ -59,7 +59,7 @@ public struct EnvironmentContext {
     /// 创建空的环境上下文（首次使用）
     public static func empty(shell: String): EnvironmentContext {
         EnvironmentContext(
-            1,
+            2,
             None,
             None,
             None,
