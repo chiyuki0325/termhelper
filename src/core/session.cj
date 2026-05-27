@@ -130,9 +130,22 @@ public class Session {
         debugTrace(
             "Session.runLlm: provider.chat returned finishReason=${chatResp.finishReason}, content_size=${chatResp.content.size}, tool_calls=${chatResp.toolCalls.size}")
         let parsed = parseStructuredResponse(chatResp)
-        debugTrace(
-            "Session.runLlm: structured response parsed, type=${llmResponseToJsonString(parsed)[0..min(80, llmResponseToJsonString(parsed).size)]}")
+        debugTrace("Session.runLlm: structured response parsed, preview=${safePreview(llmResponseToJsonString(parsed), 80)}")
         parsed
+    }
+
+    private func safePreview(text: String, maxRunes: Int64): String {
+        var result = ""
+        var count: Int64 = 0
+        for (r in text.runes()) {
+            if (count >= maxRunes) {
+                result += "..."
+                return result
+            }
+            result += String(r)
+            count++
+        }
+        result
     }
 
     /// 严格解析 LLM 响应。失败时抛出 FormatException，不做容错兜底。
