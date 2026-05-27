@@ -1,5 +1,6 @@
 package termhelper.infra
 
+import termhelper.i18n.*
 import std.fs.*
 
 // ═══════════════════════════════════════════════════════════════
@@ -7,14 +8,15 @@ import std.fs.*
 // ═══════════════════════════════════════════════════════════════
 
 let MARKER_START = "# >>> termhelper >>>"
-let MARKER_END   = "# <<< termhelper <<<"
+let MARKER_END = "# <<< termhelper <<<"
 
 public struct ShellInfo {
     public let name: String
     public let rcPath: String
 
     public init(name: String, rcPath: String) {
-        this.name = name; this.rcPath = rcPath
+        this.name = name
+        this.rcPath = rcPath
     }
 }
 
@@ -51,34 +53,34 @@ public func install(rcPath: String, shell: String): Bool {
     }
 
     if (strContains(content, MARKER_START)) {
-        println("termhelper 似乎已经安装过了")
+        println(uiText("shell_already_installed"))
         return false
     }
 
     let aliasLine = generateAlias(shell)
     let block = "\n${MARKER_START}\n${aliasLine}\n${MARKER_END}\n"
     shellWriteFile(rcPath, content + block)
-    println("已安装 Shell 集成到 ${rcPath}")
-    println("请运行: source ${rcPath}  或重启终端")
+    println("${uiText("shell_installed_to")} ${rcPath}")
+    println("${uiText("shell_source_hint")} ${rcPath}  ${uiText("shell_or_restart")}")
     true
 }
 
 public func uninstall(rcPath: String): Bool {
     let path = Path(rcPath)
     if (!exists(path)) {
-        println("RC 文件不存在: ${rcPath}")
+        println("${uiText("shell_rc_missing")}: ${rcPath}")
         return false
     }
 
     let content = shellReadFile(rcPath)
     let startIdx = strFind(content, MARKER_START)
     if (startIdx < 0) {
-        println("未找到 termhelper 标记区块")
+        println(uiText("shell_marker_missing"))
         return false
     }
     let endIdx = strFind(content, MARKER_END)
     if (endIdx < 0 || endIdx <= startIdx) {
-        println("标记区块损坏，请手动检查 ${rcPath}")
+        println("${uiText("shell_marker_corrupt")} ${rcPath}")
         return false
     }
 
@@ -86,7 +88,7 @@ public func uninstall(rcPath: String): Bool {
     let afterEnd = endIdx + MARKER_END.size
     let after = content[afterEnd..]
     shellWriteFile(rcPath, before + after)
-    println("已从 ${rcPath} 移除 termhelper Shell 集成")
+    println("${uiText("shell_uninstalled_from")} ${rcPath}")
     true
 }
 

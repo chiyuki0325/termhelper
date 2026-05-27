@@ -2,52 +2,63 @@ package termhelper.tui.screens
 
 import termhelper.types.*
 import termhelper.tui.components.*
+import termhelper.i18n.*
 import std.collection.*
 
 public func renderInvestigate(data: InvestigateData, selected: Int64): String {
-    var out = screenHeader("需要环境调查", "${data.commands.size} 项检查")
-    out += sectionTitle("原因")
+    var out = screenHeader(uiText("investigate_title"), uiCountChecks(data.commands.size))
+    out += sectionTitle(uiText("section_reason"))
     out += "  " + wrapLine(data.reason, UI_WIDTH - 2, "  ") + "\n"
-    out += sectionTitle("诊断命令")
+    out += sectionTitle(uiText("section_diagnostic_commands"))
     for (i in 0..data.commands.size) {
         let cmd = data.commands[i]
-        let cursor = if (i == selected) { "  > " } else { "    " }
-        let mark = if (cmd.authorized) { "[x] " } else { "[ ] " }
+        let cursor = if (i == selected) {
+            "  > "
+        } else {
+            "    "
+        }
+        let mark = if (cmd.authorized) {
+            "[x] "
+        } else {
+            "[ ] "
+        }
         out += cursor + mark + cmd.command + "\n"
         out += "      " + wrapLine(cmd.rationale, UI_WIDTH - 6, "      ") + "\n"
     }
-    out += keyBar("Space 切换授权  Enter 运行已授权命令  R 全部授权  Esc 退出")
+    out += keyBar(uiText("keys_investigate"))
     out
 }
 
 public func renderTextPrompt(title: String, question: String, current: String, sensitive: Bool): String {
-    var out = screenHeader(title, "等待输入")
+    var out = screenHeader(title, uiText("waiting_input"))
     if (question.size > 0) {
-        out += sectionTitle("提示")
+        out += sectionTitle(uiText("section_prompt"))
         out += wrapLine(question, UI_WIDTH, "") + "\n"
     }
-    out += sectionTitle("输入")
+    out += sectionTitle(uiText("section_input"))
     out += "  > "
     if (sensitive) {
-        for (_ in 0..current.size) { out += "*" }
+        for (_ in 0..current.size) {
+            out += "*"
+        }
     } else {
         out += current
     }
     out += "\n"
-    out += keyBar("Enter 提交  Esc 取消")
+    out += keyBar(uiText("keys_submit_cancel"))
     out
 }
 
 public func investigationSummary(data: InvestigateData, outputs: ArrayList<String>): String {
-    var out = "环境调查结果:\n"
+    var out = uiText("investigation_results") + "\n"
     if (data.reason.size > 0) {
-        out += "调查原因: ${data.reason}\n"
+        out += uiText("investigation_reason") + ": ${data.reason}\n"
     }
     for (i in 0..outputs.size) {
         out += outputs[i] + "\n"
     }
     if (outputs.size == 0) {
-        out += "用户未授权任何诊断命令。\n"
+        out += uiText("no_authorized_diagnostics") + "\n"
     }
     out
 }

@@ -1,12 +1,14 @@
 package termhelper.util
 
 import termhelper.types.*
+import termhelper.i18n.*
 import std.collection.*
 
 // ── Prompt: json_schema 模式（简洁版）──
 // 格式由 Provider 注入的 JSON Schema 保证，prompt 只给语义规则
 
 public func buildSchemaModePrompt(ctx: EnvironmentContext): String {
+    let envSummary = environmentContextSummary(ctx)
     """
 You are termhelper, a Linux terminal assistant. Convert the user's natural language request into one JSON response that strictly follows the provided JSON Schema.
 
@@ -17,9 +19,10 @@ Rules:
 - For command: set interactive=true for TTY/password/pager/editor/SSH/REPL commands.
 - Safety levels: "safe" for read-only/low-risk, "caution" for reversible, "danger" for destructive, "privilege" for sudo/root/package/service ops.
 - Never hide risk. Include specific warnings.
+${llmLanguageInstruction()}
 
 Environment context:
-${environmentContextSummary(ctx)}
+${envSummary}
 """
 }
 
@@ -27,6 +30,7 @@ ${environmentContextSummary(ctx)}
 // 无 Schema 约束，prompt 自描述完整 wire format + 示例
 
 public func buildObjectModePrompt(ctx: EnvironmentContext): String {
+    let envSummary = environmentContextSummary(ctx)
     """
 You are termhelper, a Linux terminal assistant. Convert the user's natural language request into one JSON object.
 
@@ -38,17 +42,7 @@ Return ONLY the JSON object itself. No markdown fences, no prose, no shell promp
 
 === Examples (these are the ONLY valid formats) ===
 
-Q: 删除所有tmp开头的文件夹
-A: {"type":"command","data":{"command":"rm -rf /tmp/tmp*","explanation":{"summary":"Recursively delete all directories and files in /tmp whose names start with 'tmp'","breakdown":[{"component":"rm","explanation":"File removal command"},{"component":"-rf","explanation":"Recursive and force flags: delete directories and contents without prompting"},{"component":"/tmp/tmp*","explanation":"Glob pattern matching all items in /tmp starting with 'tmp'"}]},"interactive":false,"safety":{"level":"danger","warnings":["Destructive recursive removal with wildcard","No undo possible","Verify the glob pattern matches intended targets before running"]}}}
-
-Q: 我的ip地址是什么
-A: {"type":"command","data":{"command":"ip addr show","explanation":{"summary":"Display all network interfaces and their IP addresses","breakdown":[{"component":"ip","explanation":"Network configuration tool"},{"component":"addr","explanation":"Address subcommand"},{"component":"show","explanation":"Display current addresses"}]},"interactive":false,"safety":{"level":"safe","warnings":[]}}}
-
-Q: 系统用的什么包管理器
-A: {"type":"investigate","data":{"reason":"Need to determine the OS package manager before generating install commands","commands":[{"command":"cat /etc/os-release","rationale":"Identify the Linux distribution"},{"command":"command -v apt-get dnf pacman zypper apk 2>/dev/null","rationale":"Check which package managers are available"}]}}
-
-Q: 帮我安装一个东西
-A: {"type":"clarify","data":{"question":"What software would you like to install, and on which Linux distribution? (e.g. Ubuntu/Debian, Fedora/RHEL, Arch, Alpine)"}}
+${llmObjectModeExamples()}
 
 === Field reference ===
 
@@ -73,15 +67,17 @@ type "clarify" — data fields:
 - Safety: "safe" (read-only/low-risk), "caution" (reversible), "danger" (destructive), "privilege" (sudo/root/system).
 - Never hide risk. Warn about: destructive ops, privilege escalation, recursive/wildcard, credential exposure.
 - ALWAYS match the example JSON structure exactly: {"type":..., "data":{...}}
+${llmLanguageInstruction()}
 
 Environment context:
-${environmentContextSummary(ctx)}
+${envSummary}
 """
 }
 
 // ── PTY Agent ──
 
 public func buildPtyAgentSystemPrompt(ctx: EnvironmentContext): String {
+    let envSummary = environmentContextSummary(ctx)
     """
 You are the PTY control agent for termhelper. You observe terminal output and choose one tool action at a time.
 
@@ -97,9 +93,10 @@ Rules:
 - Prefer asking the user over guessing destructive choices.
 - Respect timeouts and stop after repeated no-progress states.
 - Explain every write action briefly.
+${llmLanguageInstruction()}
 
 Environment context:
-${environmentContextSummary(ctx)}
+${envSummary}
 """
 }
 
@@ -130,7 +127,9 @@ func mapToJsonLike(map: HashMap<String, String>): String {
     var result = "{"
     var first = true
     for ((k, v) in map) {
-        if (!first) { result += ", " }
+        if (!first) {
+            result += ", "
+        }
         first = false
         result += "\"${escapeJson(k)}\": \"${escapeJson(v)}\""
     }

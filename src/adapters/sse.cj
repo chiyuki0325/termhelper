@@ -9,9 +9,9 @@ import std.collection.ArrayList
 
 /// 解析出的单个 SSE 事件
 public struct SseEvent {
-    public let event: String     // event 类型（空 = "message"）
-    public let data: String      // data 字段（多行以 \n 连接）
-    public let id: String        // 事件 id
+    public let event: String // event 类型（空 = "message"）
+    public let data: String // data 字段（多行以 \n 连接）
+    public let id: String // 事件 id
 
     public init(event: String, data: String, id: String) {
         this.event = event
@@ -76,15 +76,15 @@ public class SseParser {
     }
 
     /// 是否已收到流结束标记 [DONE]
-    public func isDone(): Bool { _done }
+    public func isDone(): Bool {
+        _done
+    }
 
     // ── 内部 ──
 
     /// 将行缓冲区转为 String
     private func lineString(): String {
-        var s = ""
-        for (b in lineBuf) { s += String(Rune(Int32(b))) }
-        s
+        String.fromUtf8(lineBuf.toArray())
     }
 
     /// 处理一个完整的行
@@ -99,7 +99,9 @@ public class SseParser {
         }
 
         // 注释行（以 : 开头），忽略
-        if (line.startsWith(":")) { return }
+        if (line.startsWith(":")) {
+            return
+        }
 
         // 解析字段
         if (line.startsWith("data:")) {
@@ -107,7 +109,9 @@ public class SseParser {
             let trimmed = v.trimAscii()
             currentData.add(trimmed)
             // 检测 [DONE] 标记
-            if (trimmed == "[DONE]") { _done = true }
+            if (trimmed == "[DONE]") {
+                _done = true
+            }
         } else if (line.startsWith("event:")) {
             let v = stripPrefix(line, "event:")
             currentEvent = v.trimAscii()
@@ -140,7 +144,9 @@ public class SseParser {
     private func joinStrings(strings: ArrayList<String>, sep: String): String {
         var result = ""
         for (i in 0..strings.size) {
-            if (i > 0) { result += sep }
+            if (i > 0) {
+                result += sep
+            }
             result += strings[i]
         }
         result

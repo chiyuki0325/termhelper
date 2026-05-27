@@ -24,18 +24,24 @@ public func makeJsonSchema(title: String, properties: ArrayList<(String, String,
         let (name, typ, desc) = properties[i]
         let propObj = JsonObject()
         propObj.put("type", JsonString(typ))
-        if (desc.size > 0) { propObj.put("description", JsonString(desc)) }
+        if (desc.size > 0) {
+            propObj.put("description", JsonString(desc))
+        }
         propsObj.put(name, propObj)
     }
     obj.put("properties", propsObj)
 
     if (required.size > 0) {
         let reqArr = JsonArray()
-        for (i in 0..required.size) { reqArr.add(JsonString(required[i])) }
+        for (i in 0..required.size) {
+            reqArr.add(JsonString(required[i]))
+        }
         obj.put("required", reqArr)
     }
 
-    if (title.size > 0) { obj.put("title", JsonString(title)) }
+    if (title.size > 0) {
+        obj.put("title", JsonString(title))
+    }
     obj.put("additionalProperties", JsonBool(false))
     obj.toJsonString()
 }
@@ -83,7 +89,9 @@ public func extractJsonFromResponse(response: ChatResponse): JsonObject {
             try {
                 let jv = JsonValue.fromStr(jsonBlock)
                 jv.asObject()
-            } catch (_: Exception) { JsonObject() }
+            } catch (_: Exception) {
+                JsonObject()
+            }
         } else {
             JsonObject()
         }
@@ -93,8 +101,6 @@ public func extractJsonFromResponse(response: ChatResponse): JsonObject {
 /// 从文本中提取 ```json ... ``` 代码块
 private func extractJsonBlock(text: String): String {
     let startMarker = "```json"
-    let endMarker = "```"
-
     let bytes = text.toArray()
     var startIdx: Int64 = -1
     var i: Int64 = 0
@@ -103,17 +109,27 @@ private func extractJsonBlock(text: String): String {
     while (i <= bytes.size - 7) {
         var found = true
         for (j in 0..7) {
-            if (bytes[i + j] != startMarker.toArray()[j]) { found = false; break }
+            if (bytes[i + j] != startMarker.toArray()[j]) {
+                found = false
+                break
+            }
         }
-        if (found) { startIdx = i + 7; break }
+        if (found) {
+            startIdx = i + 7
+            break
+        }
         i += 1
     }
 
-    if (startIdx < 0) { return "" }
+    if (startIdx < 0) {
+        return ""
+    }
 
     // 跳过 startMarker 后的换行符
     var pos = startIdx
-    while (pos < bytes.size && (bytes[pos] == b'\n' || bytes[pos] == b'\r')) { pos += 1 }
+    while (pos < bytes.size && (bytes[pos] == b'\n' || bytes[pos] == b'\r')) {
+        pos += 1
+    }
 
     // 查找结尾 ```
     var endIdx: Int64 = -1
@@ -126,12 +142,11 @@ private func extractJsonBlock(text: String): String {
         j += 1
     }
 
-    if (endIdx < 0) { return "" }
+    if (endIdx < 0) {
+        return ""
+    }
 
-    // 提取内容
-    var result = ""
-    for (k in pos..endIdx) { result += String(Rune(Int32(bytes[k]))) }
-    result.trimAscii()
+    text[pos..endIdx].trimAscii()
 }
 
 /// 校验 JSON 对象是否包含必需字段
@@ -155,16 +170,17 @@ public func validateJsonSchema(obj: JsonObject, schemaJson: String): Bool {
                 var fields = ArrayList<String>()
                 for (i in 0..reqArr.size()) {
                     match (reqArr.get(i)) {
-                        case Some(fieldJv) =>
-                            match (fieldJv.kind()) {
-                                case JsString => fields.add(fieldJv.asString().getValue())
-                                case _ => ()
-                            }
+                        case Some(fieldJv) => match (fieldJv.kind()) {
+                            case JsString => fields.add(fieldJv.asString().getValue())
+                            case _ => ()
+                        }
                         case None => ()
                     }
                 }
                 validateRequiredFields(obj, fields)
-            case None => true  // no required fields → always valid
+            case None => true // no required fields → always valid
         }
-    } catch (_: Exception) { false }
+    } catch (_: Exception) {
+        false
+    }
 }

@@ -1,6 +1,7 @@
 package termhelper.core
 
 import termhelper.types.*
+import termhelper.i18n.*
 import std.collection.*
 
 public func applySafetyFallback(resp: LLMResponse): LLMResponse {
@@ -17,13 +18,17 @@ func applyCommandSafetyFallback(data: CommandData): CommandData {
         case SafetyLevel.Caution => true
         case _ => false
     }
-    if (!shouldScan) { return data }
+    if (!shouldScan) {
+        return data
+    }
 
     let warnings = ArrayList<String>()
-    for (i in 0..data.safety.warnings.size) { warnings.add(data.safety.warnings[i]) }
+    for (i in 0..data.safety.warnings.size) {
+        warnings.add(data.safety.warnings[i])
+    }
 
     if (containsDanger(data.command)) {
-        warnings.add("本地安全兜底检测到潜在破坏性命令，请逐项确认路径、通配符和递归参数。")
+        warnings.add(uiText("local_danger_warning"))
         var newData = CommandData()
         newData.command = data.command
         newData.explanation = data.explanation
@@ -34,7 +39,7 @@ func applyCommandSafetyFallback(data: CommandData): CommandData {
     }
 
     if (containsPrivilege(data.command)) {
-        warnings.add("本地安全兜底检测到提权或系统级操作。")
+        warnings.add(uiText("local_privilege_warning"))
         var newData = CommandData()
         newData.command = data.command
         newData.explanation = data.explanation
@@ -48,44 +53,52 @@ func applyCommandSafetyFallback(data: CommandData): CommandData {
 }
 
 func containsDanger(command: String): Bool {
-    safetyContainsAny(command, [
-        "rm -rf /",
-        "rm -fr /",
-        "rm -rf *",
-        "rm -rf .",
-        "mkfs",
-        "dd if=",
-        "dd of=",
-        "chmod 777",
-        "chmod -R 777",
-        "chown -R",
-        ":(){ :|:& };:",
-        "> /dev/sd",
-        "wipefs",
-        "shred"
-    ])
+    safetyContainsAny(
+        command,
+        [
+            "rm -rf /",
+            "rm -fr /",
+            "rm -rf *",
+            "rm -rf .",
+            "mkfs",
+            "dd if=",
+            "dd of=",
+            "chmod 777",
+            "chmod -R 777",
+            "chown -R",
+            ":(){ :|:& };:",
+            "> /dev/sd",
+            "wipefs",
+            "shred"
+        ]
+    )
 }
 
 func containsPrivilege(command: String): Bool {
-    safetyContainsAny(command, [
-        "sudo ",
-        " su ",
-        "systemctl ",
-        "service ",
-        "apt-get ",
-        "dnf ",
-        "yum ",
-        "pacman ",
-        "zypper ",
-        "apk add",
-        "mount ",
-        "umount "
-    ])
+    safetyContainsAny(
+        command,
+        [
+            "sudo ",
+            " su ",
+            "systemctl ",
+            "service ",
+            "apt-get ",
+            "dnf ",
+            "yum ",
+            "pacman ",
+            "zypper ",
+            "apk add",
+            "mount ",
+            "umount "
+        ]
+    )
 }
 
 func safetyContainsAny(command: String, patterns: Array<String>): Bool {
     for (p in patterns) {
-        if (command.contains(p)) { return true }
+        if (command.contains(p)) {
+            return true
+        }
     }
     false
 }

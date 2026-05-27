@@ -1,11 +1,12 @@
 package termhelper.tui.components
 
 import termhelper.types.*
+import termhelper.i18n.*
 
 public func renderExplanation(data: CommandData): String {
-    var out = sectionTitle("分解说明")
+    var out = sectionTitle(uiText("section_breakdown"))
     if (data.explanation.breakdown.size == 0) {
-        return out + emptyState("模型没有提供分解说明。")
+        return out + emptyState(uiText("no_breakdown"))
     }
     for (item in data.explanation.breakdown) {
         out += field(item.component, item.explanation)

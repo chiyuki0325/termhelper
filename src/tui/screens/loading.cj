@@ -1,21 +1,22 @@
 package termhelper.tui.screens
 
 import termhelper.tui.components.*
+import termhelper.i18n.*
 
 public func renderLoading(query: String, tick: Int64, streamedText: String, retryText: String): String {
-    var out = screenHeader("正在生成命令", spinnerFrame(tick))
-    out += sectionTitle("查询")
+    var out = screenHeader(uiText("loading_title"), spinnerFrame(tick))
+    out += sectionTitle(uiText("section_query"))
     out += "  " + wrapLine(query, UI_WIDTH - 2, "  ") + "\n"
     if (retryText.size > 0) {
-        out += sectionTitle("重试")
+        out += sectionTitle(uiText("section_retry"))
         out += "  " + wrapLine(retryText, UI_WIDTH - 2, "  ") + "\n"
     }
-    out += sectionTitle("模型响应")
+    out += sectionTitle(uiText("section_model_response"))
     if (streamedText.size == 0) {
-        out += emptyState("正在等待模型响应...")
+        out += emptyState(uiText("waiting_model"))
     } else {
         out += wrapLine(streamedText, UI_WIDTH, "") + "\n"
     }
-    out += keyBar("Esc / Ctrl-C 退出")
+    out += keyBar(uiText("keys_exit"))
     out
 }

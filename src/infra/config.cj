@@ -1,5 +1,6 @@
 package termhelper.infra
 
+import termhelper.i18n.*
 import naivejson.macros.*
 import naivejson.schema.*
 import naivejson.schema.model.*
@@ -86,15 +87,16 @@ func parseConfigFile(): Config {
         let jv = try {
             JsonValue.fromStr(raw)
         } catch (e: Exception) {
-            throw Exception("配置文件 JSON 解析失败: ${configPath}: ${e.message}")
+            throw Exception(uiConfigJsonParseFailed(configPath, e.message))
         }
         let obj = try {
             jv.asObject()
         } catch (_: Exception) {
-            throw Exception("配置文件必须是 JSON Object: ${configPath}")
+            throw Exception(uiConfigMustBeObject(configPath))
         }
         let config = parseConfigObject(obj)
-        debugTrace("loadConfig: parsed provider=${config.provider}, base_url=${config.llm.baseUrl}, model=${config.llm.model}")
+        debugTrace(
+            "loadConfig: parsed provider=${config.provider}, base_url=${config.llm.baseUrl}, model=${config.llm.model}")
         saveConfig(config)
         return config
     } else {
@@ -110,18 +112,27 @@ func parseConfigObject(obj: JsonObject): Config {
 
     // 嵌套格式
     match (obj.get("llm")) {
-        case Some(llmJv) =>
-            try { parseLlmInto(config.llm, llmJv.asObject()) } catch (_: Exception) { () }
+        case Some(llmJv) => try {
+            parseLlmInto(config.llm, llmJv.asObject())
+        } catch (_: Exception) {
+            ()
+        }
         case None => ()
     }
     match (obj.get("execution")) {
-        case Some(execJv) =>
-            try { parseExecInto(config.execution, execJv.asObject()) } catch (_: Exception) { () }
+        case Some(execJv) => try {
+            parseExecInto(config.execution, execJv.asObject())
+        } catch (_: Exception) {
+            ()
+        }
         case None => ()
     }
     match (obj.get("retry")) {
-        case Some(retryJv) =>
-            try { parseRetryInto(config.retry, retryJv.asObject()) } catch (_: Exception) { () }
+        case Some(retryJv) => try {
+            parseRetryInto(config.retry, retryJv.asObject())
+        } catch (_: Exception) {
+            ()
+        }
         case None => ()
     }
 
@@ -162,16 +173,24 @@ func parseRetryInto(retry: RetryConfig, obj: JsonObject): Unit {
 func applyEnvOverrides(config: Config): Unit {
     if (config.provider == "anthropic") {
         let key = envGetOrDefault("ANTHROPIC_API_KEY", "")
-        if (key.size > 0) { config.llm.apiKey = key }
+        if (key.size > 0) {
+            config.llm.apiKey = key
+        }
     }
     if (config.provider == "google") {
         let key = envGetOrDefault("GOOGLE_API_KEY", "")
-        if (key.size > 0) { config.llm.apiKey = key }
+        if (key.size > 0) {
+            config.llm.apiKey = key
+        }
     }
     let llmKey = envGetOrDefault("LLM_API_KEY", "")
-    if (llmKey.size > 0) { config.llm.apiKey = llmKey }
+    if (llmKey.size > 0) {
+        config.llm.apiKey = llmKey
+    }
     let openaiKey = envGetOrDefault("OPENAI_API_KEY", "")
-    if (openaiKey.size > 0 && config.llm.apiKey.size == 0) { config.llm.apiKey = openaiKey }
+    if (openaiKey.size > 0 && config.llm.apiKey.size == 0) {
+        config.llm.apiKey = openaiKey
+    }
 }
 
 // ── 交互式 API Key ──
@@ -231,13 +250,20 @@ func configToNestedJson(config: Config): JsonObject {
 
 func jsonGetString(obj: JsonObject, key: String, default: String): String {
     match (obj.get(key)) {
-        case Some(jv) => match (jv.kind()) { case JsString => jv.asString().getValue(); case _ => default }
+        case Some(jv) => match (jv.kind()) {
+            case JsString => jv.asString().getValue();
+            case _ => default
+        }
         case None => default
     }
 }
+
 func jsonGetInt(obj: JsonObject, key: String, default: Int64): Int64 {
     match (obj.get(key)) {
-        case Some(jv) => match (jv.kind()) { case JsInt => jv.asInt().getValue(); case _ => default }
+        case Some(jv) => match (jv.kind()) {
+            case JsInt => jv.asInt().getValue();
+            case _ => default
+        }
         case None => default
     }
 }

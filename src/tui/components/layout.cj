@@ -1,5 +1,7 @@
 package termhelper.tui.components
 
+import termhelper.i18n.*
+
 public let UI_WIDTH: Int64 = 76
 
 public func screenHeader(title: String, status: String): String {
@@ -24,7 +26,12 @@ public func bullet(text: String): String {
 }
 
 public func field(label: String, value: String): String {
-    "  " + label + "：" + wrapLine(value, UI_WIDTH - label.size - 4, repeatText(" ", label.size + 4)) + "\n"
+    let sep = if (isChinese()) {
+        "："
+    } else {
+        ": "
+    }
+    "  " + label + sep + wrapLine(value, UI_WIDTH - label.size - 4, repeatText(" ", label.size + 4)) + "\n"
 }
 
 public func codeBlock(text: String): String {
@@ -94,7 +101,11 @@ public func wrapLine(text: String, width: Int64, indent: String): String {
     }
 
     if (line.size > 0) {
-        if (first) { out += line } else { out += "\n" + indent + line }
+        if (first) {
+            out += line
+        } else {
+            out += "\n" + indent + line
+        }
     }
     out
 }
@@ -123,5 +134,9 @@ func fitToWidth(text: String, width: Int64): String {
 }
 
 func runeWidth(piece: String): Int64 {
-    if (piece.size > 1) { 2 } else { 1 }
+    if (piece.size > 1) {
+        2
+    } else {
+        1
+    }
 }

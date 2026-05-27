@@ -1,13 +1,14 @@
 package termhelper.tui
 
 import termhelper.types.*
+import termhelper.i18n.*
 
 public func safetyLabel(level: SafetyLevel): String {
     match (level) {
-        case SafetyLevel.Safe => "安全"
-        case SafetyLevel.Caution => "注意"
-        case SafetyLevel.Danger => "危险"
-        case SafetyLevel.Privilege => "提权"
+        case SafetyLevel.Safe => uiText("safety_safe")
+        case SafetyLevel.Caution => uiText("safety_caution")
+        case SafetyLevel.Danger => uiText("safety_danger")
+        case SafetyLevel.Privilege => uiText("safety_privilege")
     }
 }
 
@@ -16,9 +17,19 @@ public func safetyMarker(level: SafetyLevel): String {
         case SafetyLevel.Safe => "[+]"
         case SafetyLevel.Caution => "[!]"
         case SafetyLevel.Danger => "[!!]"
-        case SafetyLevel.Privilege => "[锁]"
+        case SafetyLevel.Privilege =>
+            if (isChinese()) {
+                "[锁]"
+            } else {
+                "[root]"
+            }
     }
 }
 
-public func errorLabel(): String { "错误" }
-public func successLabel(): String { "完成" }
+public func errorLabel(): String {
+    uiText("error_title")
+}
+
+public func successLabel(): String {
+    uiText("status_done")
+}

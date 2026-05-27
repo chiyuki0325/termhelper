@@ -1,5 +1,6 @@
 package termhelper.infra
 
+import termhelper.i18n.*
 import std.collection.*
 
 // ═══════════════════════════════════════════════════════════════
@@ -38,15 +39,24 @@ public func copyToClipboard(text: String): ClipResult {
 /// 实际调用 wl-copy（管道 stdin，无 shell 注入风险 #8）
 func tryWlCopy(text: String): ClipResult {
     let ok = pipeTextToCommand(text, "/usr/bin/wl-copy", ArrayList<String>())
-    if (ok) { ClipResult.Ok } else { ClipResult.Unsupported("wl-copy 执行失败") }
+    if (ok) {
+        ClipResult.Ok
+    } else {
+        ClipResult.Unsupported(uiText("wl_copy_failed"))
+    }
 }
 
 /// 实际调用 xclip（管道 stdin，无 shell 注入风险 #8）
 func tryXclip(text: String): ClipResult {
     let args = ArrayList<String>()
-    args.add("-selection"); args.add("clipboard")
+    args.add("-selection");
+    args.add("clipboard")
     let ok = pipeTextToCommand(text, "/usr/bin/xclip", args)
-    if (ok) { ClipResult.Ok } else { ClipResult.Unsupported("xclip 执行失败") }
+    if (ok) {
+        ClipResult.Ok
+    } else {
+        ClipResult.Unsupported(uiText("xclip_failed"))
+    }
 }
 
 // ── 管道写入工具（修复 #8 命令注入）──
@@ -55,11 +65,18 @@ func tryXclip(text: String): ClipResult {
 func pipeTextToCommand(text: String, cmdPath: String, args: ArrayList<String>): Bool {
     unsafe {
         let fds = LibC.malloc<Int32>(count: 2)
-        if (pipe(fds) < 0) { LibC.free(fds); return false }
-        let readFd = fds.read(0); let writeFd = fds.read(1)
+        if (pipe(fds) < 0) {
+            LibC.free(fds);
+            return false
+        }
+        let readFd = fds.read(0);
+        let writeFd = fds.read(1)
 
         let pid = fork()
-        if (pid < 0) { LibC.free(fds); return false }
+        if (pid < 0) {
+            LibC.free(fds);
+            return false
+        }
 
         if (pid == 0) {
             close(writeFd)
@@ -84,7 +101,9 @@ func pipeTextToCommand(text: String, cmdPath: String, args: ArrayList<String>): 
         close(readFd)
         let bytes = text.toArray()
         let writeBuf = LibC.malloc<UInt8>(count: bytes.size)
-        for (i in 0..bytes.size) { writeBuf.write(i, bytes[i]) }
+        for (i in 0..bytes.size) {
+            writeBuf.write(i, bytes[i])
+        }
         write(writeFd, writeBuf, UInt64(bytes.size))
         LibC.free(writeBuf)
         close(writeFd)
@@ -94,7 +113,8 @@ func pipeTextToCommand(text: String, cmdPath: String, args: ArrayList<String>): 
         statusPtr.write(0, 0)
         waitpid(pid, statusPtr, 0)
         let rawStatus = statusPtr.read(0)
-        LibC.free(statusPtr); LibC.free(fds)
+        LibC.free(statusPtr);
+        LibC.free(fds)
 
         (rawStatus & 0x7F) == 0 && ((rawStatus >> 8) & 0xFF) == 0
     }
@@ -104,9 +124,9 @@ func pipeTextToCommand(text: String, cmdPath: String, args: ArrayList<String>): 
 public func clipboardInstallHint(): String {
     let waylandDisplay = envGetOrDefault("WAYLAND_DISPLAY", "")
     if (waylandDisplay.size > 0) {
-        "请安装 wl-clipboard: sudo apt install wl-clipboard"
+        uiText("install_wl_clipboard")
     } else {
-        "请安装 xclip: sudo apt install xclip"
+        uiText("install_xclip")
     }
 }
 
@@ -136,8 +156,16 @@ func base64Encode(input: String): String {
     var i: Int64 = 0
     while (i < bytes.size) {
         let b0 = Int32(bytes[i])
-        let b1 = if (i + 1 < bytes.size) { Int32(bytes[i + 1]) } else { Int32(0) }
-        let b2 = if (i + 2 < bytes.size) { Int32(bytes[i + 2]) } else { Int32(0) }
+        let b1 = if (i + 1 < bytes.size) {
+            Int32(bytes[i + 1])
+        } else {
+            Int32(0)
+        }
+        let b2 = if (i + 2 < bytes.size) {
+            Int32(bytes[i + 2])
+        } else {
+            Int32(0)
+        }
 
         let idx0 = (b0 >> 2) & 0x3F
         let idx1 = ((b0 & 0x03) << 4) | ((b1 >> 4) & 0x0F)
@@ -146,12 +174,22 @@ func base64Encode(input: String): String {
 
         result += charAt(B64_CHARS, idx0)
         result += charAt(B64_CHARS, idx1)
-        result += if (i + 1 < bytes.size) { charAt(B64_CHARS, idx2) } else { "=" }
-        result += if (i + 2 < bytes.size) { charAt(B64_CHARS, idx3) } else { "=" }
+        result += if (i + 1 < bytes.size) {
+            charAt(B64_CHARS, idx2)
+        } else {
+            "="
+        }
+        result += if (i + 2 < bytes.size) {
+            charAt(B64_CHARS, idx3)
+        } else {
+            "="
+        }
 
         i += 3
     }
     result
 }
 
-func charAt(s: String, idx: Int32): String { String(Rune(s[Int64(idx)])) }
+func charAt(s: String, idx: Int32): String {
+    String(Rune(s[Int64(idx)]))
+}

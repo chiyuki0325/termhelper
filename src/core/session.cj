@@ -3,6 +3,7 @@ package termhelper.core
 import termhelper.types.*
 import termhelper.adapters.*
 import termhelper.infra.*
+import termhelper.i18n.*
 import termhelper.util.*
 import std.collection.*
 import std.math.*
@@ -11,17 +12,19 @@ import std.math.*
 
 /// handleResponse() 返回的 downstream action，由调用方消费
 public enum SessionAction {
-    | ShowCommand(CommandData)          // 展示命令结果
+    | ShowCommand(CommandData) // 展示命令结果
     | RequestInvestigate(InvestigateData) // 请求环境调查
-    | AskClarify(ClarifyData)           // 请求用户澄清
-    | FormatError(String)               // JSON/Structured Output 解析失败
-    | ProviderError(String)             // LLM Provider 不可恢复错误
+    | AskClarify(ClarifyData) // 请求用户澄清
+    | FormatError(String) // JSON/Structured Output 解析失败
+    | ProviderError(String) // LLM Provider 不可恢复错误
 }
 
 // ── 格式异常 ──
 
 public class FormatException <: Exception {
-    public init(message: String) { super(message) }
+    public init(message: String) {
+        super(message)
+    }
 }
 
 func makeMessage(role: MessageRole, content: String): Message {
@@ -99,10 +102,12 @@ public class Session {
         debugTrace("Session.runLlm: building request")
         let req = requestBuilder.build(query, history, context, config)
         debugTrace("Session.runLlm: request built, calling provider.chat")
-        let chatResp = withLlmRetry(config.retry, { => provider.chat(req) }, noRetryNotify)
-        debugTrace("Session.runLlm: provider.chat returned finishReason=${chatResp.finishReason}, content_size=${chatResp.content.size}, tool_calls=${chatResp.toolCalls.size}")
+        let chatResp = withLlmRetry(config.retry, {=> provider.chat(req)}, noRetryNotify)
+        debugTrace(
+            "Session.runLlm: provider.chat returned finishReason=${chatResp.finishReason}, content_size=${chatResp.content.size}, tool_calls=${chatResp.toolCalls.size}")
         let parsed = parseStructuredResponse(chatResp)
-        debugTrace("Session.runLlm: structured response parsed, type=${llmResponseToJsonString(parsed)[0..min(80, llmResponseToJsonString(parsed).size)]}")
+        debugTrace(
+            "Session.runLlm: structured response parsed, type=${llmResponseToJsonString(parsed)[0..min(80, llmResponseToJsonString(parsed).size)]}")
         parsed
     }
 
@@ -120,7 +125,7 @@ public class Session {
                 resp
             case None =>
                 debugTrace("Session.parseStructuredResponse: parse failed, raw=${jsonText}")
-                throw FormatException("LLM 返回无法解析为 termhelper 结构化响应。finishReason: ${chatResp.finishReason}, content_size=${jsonText.size}。完整内容已写入 debug trace。")
+                throw FormatException(uiLlmParseFailed(chatResp.finishReason, jsonText.size))
         }
     }
 }

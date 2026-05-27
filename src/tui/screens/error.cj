@@ -1,14 +1,19 @@
 package termhelper.tui.screens
 
 import termhelper.tui.components.*
+import termhelper.i18n.*
 
 public func renderError(message: String, retryable: Bool): String {
-    var out = screenHeader("出现错误", if (retryable) { "可重试" } else { "" })
+    var out = screenHeader(uiText("error_title"), if (retryable) {
+        uiText("retryable")
+    } else {
+        ""
+    })
     out += wrapLine(message, UI_WIDTH, "") + "\n"
     if (retryable) {
-        out += sectionTitle("恢复")
-        out += emptyState("按 Enter/R 重试上一次请求。")
+        out += sectionTitle(uiText("section_recovery"))
+        out += emptyState(uiText("retry_hint"))
     }
-    out += keyBar("Esc / Ctrl-C 退出")
+    out += keyBar(uiText("keys_exit"))
     out
 }

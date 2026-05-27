@@ -5,6 +5,7 @@ import termhelper.infra.*
 import termhelper.adapters.*
 import termhelper.core.*
 import termhelper.util.*
+import termhelper.i18n.*
 
 /// 程序入口
 /// 用法：
@@ -14,8 +15,8 @@ import termhelper.util.*
 ///   termhelper --help             — 打印帮助信息
 main(args: Array<String>): Int64 {
     if (args.size == 0) {
-        println("用法: termhelper <查询> | --install | --uninstall | --help")
-        println("尝试: termhelper --help")
+        println(uiText("usage_short"))
+        println(uiText("try_help"))
         return 1
     }
 
@@ -25,25 +26,24 @@ main(args: Array<String>): Int64 {
     if (firstArg.startsWith("--")) {
         match (firstArg) {
             case "--install" =>
-                println("[阶段 1 占位] 安装 Shell 集成")
+                println(uiText("install_placeholder"))
                 return 0
             case "--uninstall" =>
-                println("[阶段 1 占位] 卸载 Shell 集成")
+                println(uiText("uninstall_placeholder"))
                 return 0
             case "--debug" =>
                 if (args.size < 2) {
-                    println("用法: termhelper --debug <查询>")
+                    println(uiText("usage_debug"))
                     return 1
                 }
                 return runDebug(joinArgsFrom(args, 1))
-            case "--tui-demo" =>
-                return runTuiDemo()
+            case "--tui-demo" => return runTuiDemo()
             case "--help" =>
                 printHelp()
                 return 0
             case _ =>
-                println("未知参数: ${firstArg}")
-                println("尝试: termhelper --help")
+                println(uiUnknownArgument(firstArg))
+                println(uiText("try_help"))
                 return 1
         }
     }
@@ -54,20 +54,20 @@ main(args: Array<String>): Int64 {
 
 /// 打印帮助信息
 func printHelp(): Unit {
-    println("termhelper — Linux 终端智能助手")
-    println("将自然语言转换为可执行的 Shell 命令，辅以说明和安全警告")
+    println(uiText("help_title"))
+    println(uiText("help_desc"))
     println()
-    println("用法:")
-    println("  termhelper <自然语言查询>    执行查询，启动全屏 TUI")
-    println("  termhelper --install          安装 Shell 集成 (alias/def 写入 RC 文件)")
-    println("  termhelper --uninstall        卸载 Shell 集成 (从 RC 文件移除)")
-    println("  termhelper --debug <查询>     CLI 调试模式，打印 LLMResponse JSON")
-    println("  termhelper --tui-demo         展示彩色 TUI 样式预览")
-    println("  termhelper --help             打印此帮助信息")
+    println(uiText("help_usage"))
+    println(uiText("help_query"))
+    println(uiText("help_install"))
+    println(uiText("help_uninstall"))
+    println(uiText("help_debug"))
+    println(uiText("help_demo"))
+    println(uiText("help_help"))
     println()
-    println("示例:")
-    println("  ?? 删除所有 std 开头的文件夹")
-    println("  ?? 更新系统")
+    println(uiText("help_examples"))
+    println(uiText("help_example_delete"))
+    println(uiText("help_example_update"))
 }
 
 /// 将参数数组拼接为空格分隔的查询字符串
@@ -92,12 +92,13 @@ func runDebug(query: String): Int64 {
     let config = try {
         loadConfig()
     } catch (e: Exception) {
-        println("配置加载失败: ${e.message}")
+        println(uiConfigLoadFailed(e.message))
         return 1
     }
-    debugTrace("runDebug: config loaded provider=${config.provider}, base_url=${config.llm.baseUrl}, model=${config.llm.model}, timeout=${config.llm.timeoutSec}")
+    debugTrace(
+        "runDebug: config loaded provider=${config.provider}, base_url=${config.llm.baseUrl}, model=${config.llm.model}, timeout=${config.llm.timeoutSec}")
     if (needsInteractiveConfig(config)) {
-        println("缺少 LLM API Key。请设置 LLM_API_KEY / OPENAI_API_KEY，或写入 ~/.config/termhelper/config.json。")
+        println(uiText("missing_api_key"))
         return 1
     }
 
@@ -119,11 +120,11 @@ func runQueryTui(query: String): Int64 {
     let config = try {
         loadConfig()
     } catch (e: Exception) {
-        println("配置加载失败: ${e.message}")
+        println(uiConfigLoadFailed(e.message))
         return 1
     }
     if (needsInteractiveConfig(config)) {
-        println("缺少 LLM API Key。请设置 LLM_API_KEY / OPENAI_API_KEY，或写入 ~/.config/termhelper/config.json。")
+        println(uiText("missing_api_key"))
         return 1
     }
 
@@ -135,7 +136,7 @@ func runQueryTui(query: String): Int64 {
     match (runApp(query, session, config)) {
         case Ok(_) => 0
         case Err(e) =>
-            println("TUI 启动失败: ${e.message}")
+            println(uiTuiStartFailed(e.message))
             1
     }
 }
@@ -144,7 +145,7 @@ func runTuiDemo(): Int64 {
     match (runStyleDemo()) {
         case Ok(_) => 0
         case Err(e) =>
-            println("TUI 样式预览启动失败: ${e.message}")
+            println(uiTuiDemoStartFailed(e.message))
             1
     }
 }
@@ -155,13 +156,16 @@ func createProvider(config: Config): LLMProvider {
     let connectSec = config.llm.connectTimeoutSec
     let readSec = config.llm.timeoutSec
     let idleSec = config.llm.idleTimeoutSec
-    debugTrace("createProvider: provider=${providerName}, base_url=${baseUrl}, connect=${connectSec}, read=${readSec}, idle=${idleSec}")
+    debugTrace(
+        "createProvider: provider=${providerName}, base_url=${baseUrl}, connect=${connectSec}, read=${readSec}, idle=${idleSec}")
     if (providerName == "anthropic") {
-        LLMProvider.fromAnthropic(AnthropicProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
+        LLMProvider.fromAnthropic(
+            AnthropicProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
     } else if (providerName == "google") {
         LLMProvider.fromGoogle(GoogleProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
     } else {
-        LLMProvider.fromOpenAI(OpenAICompatProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
+        LLMProvider.fromOpenAI(
+            OpenAICompatProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
     }
 }
 
