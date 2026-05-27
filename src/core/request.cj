@@ -17,10 +17,16 @@ public class RequestBuilder {
         let useJsonObject = config.llm.structuredOutputMode == "json_object"
 
         if (useJsonObject) {
+            req.systemPrompts.add(buildObjectModeStaticPrompt())
+            req.systemPrompts.add(buildEnvironmentContextPrompt(ctx))
             req.systemPrompt = Some(buildObjectModePrompt(ctx))
         } else {
             // auto / json_schema: 主 prompt 精简，fallback prompt 详细
+            req.systemPrompts.add(buildSchemaModeStaticPrompt())
+            req.systemPrompts.add(buildEnvironmentContextPrompt(ctx))
             req.systemPrompt = Some(buildSchemaModePrompt(ctx))
+            req.fallbackSystemPrompts.add(buildObjectModeStaticPrompt())
+            req.fallbackSystemPrompts.add(buildEnvironmentContextPrompt(ctx))
             req.fallbackSystemPrompt = Some(buildObjectModePrompt(ctx))
         }
 

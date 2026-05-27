@@ -79,10 +79,12 @@ public class ChatRequest {
     public var toolChoice: ?ToolChoice
     public var responseFormat: ?ResponseFormat
     public var systemPrompt: ?String
+    public let systemPrompts: ArrayList<String>
     /// "auto" (try json_schema first) | "json_object" (skip json_schema) | "json_schema" (native only)
     public var structuredOutputMode: String
     /// system prompt to use when falling back from json_schema to json_object
     public var fallbackSystemPrompt: ?String
+    public let fallbackSystemPrompts: ArrayList<String>
 
     public init(model: String) {
         this.messages = ArrayList<Message>()
@@ -93,8 +95,10 @@ public class ChatRequest {
         this.toolChoice = None
         this.responseFormat = None
         this.systemPrompt = None
+        this.systemPrompts = ArrayList<String>()
         this.structuredOutputMode = "auto"
         this.fallbackSystemPrompt = None
+        this.fallbackSystemPrompts = ArrayList<String>()
     }
 
     public func addUserMessage(content: String): Unit {

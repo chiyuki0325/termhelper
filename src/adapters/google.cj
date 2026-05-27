@@ -272,16 +272,28 @@ public class GoogleProvider {
         let obj = JsonObject()
 
         // systemInstruction
-        match (req.systemPrompt) {
-            case Some(sp) =>
-                let sysObj = JsonObject()
-                let partsArr = JsonArray()
+        if (req.systemPrompts.size > 0) {
+            let sysObj = JsonObject()
+            let partsArr = JsonArray()
+            for (i in 0..req.systemPrompts.size) {
                 let textPart = JsonObject()
-                textPart.put("text", JsonString(sp))
+                textPart.put("text", JsonString(req.systemPrompts[i]))
                 partsArr.add(textPart)
-                sysObj.put("parts", partsArr)
-                obj.put("systemInstruction", sysObj)
-            case None => ()
+            }
+            sysObj.put("parts", partsArr)
+            obj.put("systemInstruction", sysObj)
+        } else {
+            match (req.systemPrompt) {
+                case Some(sp) =>
+                    let sysObj = JsonObject()
+                    let partsArr = JsonArray()
+                    let textPart = JsonObject()
+                    textPart.put("text", JsonString(sp))
+                    partsArr.add(textPart)
+                    sysObj.put("parts", partsArr)
+                    obj.put("systemInstruction", sysObj)
+                case None => ()
+            }
         }
 
         // contents (messages)

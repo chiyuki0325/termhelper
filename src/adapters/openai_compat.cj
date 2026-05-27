@@ -39,6 +39,12 @@ public class OpenAICompatProvider {
         if (shouldFallbackToJsonObject(req, parsed)) {
             debugTrace("OpenAICompat.chat: json_schema unavailable, retrying with json_object")
             req.responseFormat = Some(ResponseFormat.JsonObject)
+            if (req.fallbackSystemPrompts.size > 0) {
+                req.systemPrompts.clear()
+                for (i in 0..req.fallbackSystemPrompts.size) {
+                    req.systemPrompts.add(req.fallbackSystemPrompts[i])
+                }
+            }
             match (req.fallbackSystemPrompt) {
                 case Some(p) => req.systemPrompt = Some(p)
                 case None => ()
@@ -251,13 +257,22 @@ public class OpenAICompatProvider {
         obj.put("stream", JsonBool(stream))
 
         let msgs = JsonArray()
-        match (req.systemPrompt) {
-            case Some(sp) =>
+        if (req.systemPrompts.size > 0) {
+            for (i in 0..req.systemPrompts.size) {
                 let sysObj = JsonObject()
                 sysObj.put("role", JsonString("system"))
-                sysObj.put("content", JsonString(sp))
+                sysObj.put("content", JsonString(req.systemPrompts[i]))
                 msgs.add(sysObj)
-            case None => ()
+            }
+        } else {
+            match (req.systemPrompt) {
+                case Some(sp) =>
+                    let sysObj = JsonObject()
+                    sysObj.put("role", JsonString("system"))
+                    sysObj.put("content", JsonString(sp))
+                    msgs.add(sysObj)
+                case None => ()
+            }
         }
         for (i in 0..req.messages.size) {
             let m = req.messages[i]

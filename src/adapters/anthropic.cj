@@ -301,10 +301,22 @@ public class AnthropicProvider {
             case None => obj.put("max_tokens", JsonInt(128000))
         }
 
-        // system prompt (top-level, not in messages)
-        match (req.systemPrompt) {
-            case Some(sp) => obj.put("system", JsonString(sp))
-            case None => ()
+        // system prompt (top-level, not in messages).
+        // Use content blocks so Anthropic prompt caching can anchor the stable prefixes.
+        if (req.systemPrompts.size > 0) {
+            let systemArr = JsonArray()
+            for (i in 0..req.systemPrompts.size) {
+                systemArr.add(anthropicSystemTextBlock(req.systemPrompts[i], true))
+            }
+            obj.put("system", systemArr)
+        } else {
+            match (req.systemPrompt) {
+                case Some(sp) =>
+                    let systemArr = JsonArray()
+                    systemArr.add(anthropicSystemTextBlock(sp, true))
+                    obj.put("system", systemArr)
+                case None => ()
+            }
         }
 
         // messages
@@ -363,6 +375,18 @@ public class AnthropicProvider {
         }
 
         obj.toJsonString()
+    }
+
+    private func anthropicSystemTextBlock(text: String, cache: Bool): JsonObject {
+        let block = JsonObject()
+        block.put("type", JsonString("text"))
+        block.put("text", JsonString(text))
+        if (cache) {
+            let cacheControl = JsonObject()
+            cacheControl.put("type", JsonString("ephemeral"))
+            block.put("cache_control", cacheControl)
+        }
+        block
     }
 
     // ── 非流式响应解析 ──
