@@ -8,6 +8,7 @@ RATATUI_FALLBACK="references/ratatui/cangjie-tui-ffi/target/release"
 BUILD_LIBS="target/release/ratatui"
 
 export LD_LIBRARY_PATH="${STDX_LIB}:${BUILD_LIBS}:${LD_LIBRARY_PATH:-}"
+unset NO_COLOR
 
 # 追加 ratatui lib
 for dir in "$RATATUI_LIB" "$RATATUI_FALLBACK"; do

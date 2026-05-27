@@ -5,10 +5,10 @@
   version = "0.1.0"
   output-type = "executable"
   compile-option = ""
-  link-option = "-L/home/chiyuki/Projects/termhelper/references/ratatui/cangjie-tui-ffi/target/release -lcangjie_tui"
+  link-option = "-L/home/chiyuki/Projects/termhelper/thirdparty/ratatui/cangjie-tui-ffi/target/release -lcangjie_tui"
 
 [dependencies]
-  ratatui = { path = "references/ratatui/cangjie-ratatui-sdk" }
+  ratatui = { path = "thirdparty/ratatui/cangjie-ratatui-sdk" }
   naivejson = { path = "thirdparty/naivejson/naivejson" }
 
 [target.aarch64-unknown-linux-gnu]

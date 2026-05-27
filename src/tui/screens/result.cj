@@ -5,29 +5,26 @@ import termhelper.tui.components.*
 import std.collection.*
 
 public func renderResult(data: CommandData, selected: Int64): String {
-    var out = "termhelper - result\n"
-    out += "===================\n\n"
+    let mode = if (data.interactive) { "需要交互" } else { "可运行" }
+    var out = screenHeader("已生成命令", mode)
     out += renderCommandDisplay(data)
-    out += "\n"
     out += renderExplanation(data)
-    out += "\n"
     out += renderSafetyBadge(data.safety)
-    out += "\n"
     out += renderOptionMenu(resultMenu(data.interactive), selected)
-    out += "\nR/C/M shortcuts are available. Esc exits.\n"
+    out += keyBar("上/下 选择  Enter 确认  R 运行  C 复制  M 修改  Esc 退出")
     out
 }
 
 public func resultMenu(interactive: Bool): ArrayList<MenuItem> {
     let items = ArrayList<MenuItem>()
     if (interactive) {
-        items.add(MenuItem("copy", "Copy command (interactive commands run manually in alpha)"))
-        items.add(MenuItem("modify", "Modify"))
-        items.add(MenuItem("exit", "Exit"))
+        items.add(MenuItem("copy", "复制命令"))
+        items.add(MenuItem("modify", "修改"))
+        items.add(MenuItem("exit", "退出"))
     } else {
-        items.add(MenuItem("run", "Run"))
-        items.add(MenuItem("copy", "Copy"))
-        items.add(MenuItem("modify", "Modify"))
+        items.add(MenuItem("run", "运行"))
+        items.add(MenuItem("copy", "复制"))
+        items.add(MenuItem("modify", "修改"))
     }
     items
 }

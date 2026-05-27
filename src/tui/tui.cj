@@ -126,6 +126,28 @@ public func runMainLoop(terminal: Int64): Result<Unit, RatatuiException> {
     Result.Ok(())
 }
 
+public func runStyleDemo(): Result<Unit, RatatuiException> {
+    match (initTUI()) {
+        case Ok(terminal) =>
+            renderStyleDemo(terminal)
+            var running = true
+            while (running) {
+                match (pollEvent(100)) {
+                    case Some(eventHandle) =>
+                        let code = eventGetKeyCode(eventHandle)
+                        if (eventIsQuit(eventHandle) || code == 27 || code == 13 || code == 10) {
+                            running = false
+                        }
+                        eventFree(eventHandle)
+                    case None => ()
+                }
+            }
+            let _ = cleanupTUI(terminal)
+            Result.Ok(())
+        case Err(e) => Result.Err(e)
+    }
+}
+
 /// 清理 TUI，恢复终端模式
 public func cleanupTUI(terminal: Int64): Result<Unit, RatatuiException> {
     cleanupTerminal(terminal)
@@ -309,7 +331,7 @@ func handleInvestigateAction(state: TuiAppState, session: Session, config: Confi
             for (cmd in data.commands) { cmd.authorized = true }
         case Action.Confirm =>
             state.screen = "loading"
-            state.loadingText = "Running authorized diagnostics...\n"
+            state.loadingText = "正在运行已授权的诊断命令...\n"
             state.retryText = ""
             runInvestigationTask(state.queue, session, data, config.execution.spawnTimeoutSec)
         case Action.Back | Action.Interrupt =>
@@ -322,6 +344,14 @@ func handleTextPromptAction(state: TuiAppState, session: Session, action: Action
     match (action) {
         case Action.TextChar(ch) =>
             state.input += String(ch)
+        case Action.Run =>
+            state.input += "r"
+        case Action.Copy =>
+            state.input += "c"
+        case Action.Modify =>
+            state.input += "m"
+        case Action.Toggle =>
+            state.input += " "
         case Action.Backspace =>
             if (state.input.size > 0) {
                 state.input = state.input[0..state.input.size - 1]
@@ -375,7 +405,7 @@ func pollExecute(state: TuiAppState): Unit {
     while (reading) {
         match (handle.tryReadLine()) {
             case Some(line) =>
-                let prefix = if (line.isStderr) { "stderr: " } else { "stdout: " }
+                let prefix = if (line.isStderr) { "标准错误: " } else { "标准输出: " }
                 state.executeLines.add(prefix + line.text)
             case None =>
                 reading = false
@@ -423,7 +453,7 @@ func copyCommandOrShowError(state: TuiAppState, command: String): Unit {
         case ClipResult.Ok =>
             state.shouldExit = true
         case ClipResult.Unsupported(reason) =>
-            showError(state, "${reason}\n\n${clipboardInstallHint()}\n\nCommand:\n${command}", false)
+            showError(state, "${reason}\n\n${clipboardInstallHint()}\n\n命令:\n${command}", false)
     }
 }
 
@@ -432,7 +462,7 @@ func openModify(state: TuiAppState, command: String): Unit {
     state.input = ""
     state.loadingText = ""
     state.screen = "prompt"
-    state.errorMessage = "Current command:\n${command}"
+    state.errorMessage = "当前命令:\n${command}"
 }
 
 func showError(state: TuiAppState, message: String, retryable: Bool): Unit {
@@ -455,15 +485,314 @@ func render(terminal: Int64, state: TuiAppState): Unit {
     // Do not manually free handles that have been attached to the terminal.
     let _ = clearTerminalWidgets(terminal)
     state.widgetHandle = None
-    match (createTextWidget(content)) {
+    match (createBlockWidget(screenTitle(state))) {
+        case Ok(handle) =>
+            let _ = setWidgetPosition(handle, 0, 0)
+            let _ = setWidgetSize(handle, 0, 0)
+            let _ = addWidgetToTerminal(terminal, handle)
+        case Err(_) => ()
+    }
+    if (!renderStyledContent(terminal, state, spinnerFrame)) {
+        match (createTextWidget(content)) {
+            case Ok(handle) =>
+                state.widgetHandle = Some(handle)
+                let _ = setWidgetPosition(handle, 2, 1)
+                let _ = setWidgetSize(handle, 0, 0)
+                let _ = addWidgetToTerminal(terminal, handle)
+            case Err(_) => ()
+        }
+    }
+    let _ = drawTerminal(terminal)
+}
+
+func renderStyledContent(terminal: Int64, state: TuiAppState, spinnerFrame: Int64): Bool {
+    match (createRichTextWidget()) {
         case Ok(handle) =>
             state.widgetHandle = Some(handle)
+            buildStyledScreen(handle, state, spinnerFrame)
+            let _ = setWidgetPosition(handle, 2, 1)
+            let _ = setWidgetSize(handle, 0, 0)
+            let _ = addWidgetToTerminal(terminal, handle)
+            true
+        case Err(_) => false
+    }
+}
+
+func buildStyledScreen(handle: Int64, state: TuiAppState, spinnerFrame: Int64): Unit {
+    match (state.screen) {
+        case "loading" => styledLoading(handle, state.query, spinnerFrame, state.loadingText, state.retryText)
+        case "result" =>
+            match (state.currentCommand) {
+                case Some(data) => styledResult(handle, data, state.selected)
+                case None => styledError(handle, "当前没有可用命令。", false)
+            }
+        case "execute" => styledExecute(handle, state.executeCommand, state.executeLines, state.executeDone, state.executeResult)
+        case "prompt" => styledPrompt(handle, state)
+        case "error" => styledError(handle, state.errorMessage, state.retryable)
+        case _ => richTextLine(handle, "智能终端助手", styleTitle())
+    }
+}
+
+func styledLoading(handle: Int64, query: String, frame: Int64, streamedText: String, retryText: String): Unit {
+    richTextSpan(handle, "正在生成命令", styleTitle())
+    richTextSpan(handle, "  " + spinnerFrame(frame), styleInfo())
+    richTextLine(handle)
+    richTextLine(handle)
+    styledSection(handle, "查询")
+    styledWrapped(handle, "  " + query, UI_WIDTH - 2, "  ", styleDefault())
+    if (retryText.size > 0) {
+        richTextLine(handle)
+        styledSection(handle, "重试")
+        styledWrapped(handle, "  " + retryText, UI_WIDTH - 2, "  ", styleWarning())
+    }
+    richTextLine(handle)
+    styledSection(handle, "模型响应")
+    if (streamedText.size == 0) {
+        richTextLine(handle, "  正在等待模型响应...", styleMuted())
+    } else {
+        styledWrapped(handle, streamedText, UI_WIDTH, "", styleDefault())
+    }
+    styledKeys(handle, "Esc/Ctrl+C 退出")
+}
+
+func styledResult(handle: Int64, data: CommandData, selected: Int64): Unit {
+    richTextSpan(handle, "已生成命令", styleTitle())
+    richTextSpan(handle, "  " + if (data.interactive) { "需要交互" } else { "可运行" }, if (data.interactive) { styleWarning() } else { styleSuccess() })
+    richTextLine(handle)
+    richTextLine(handle)
+    styledSection(handle, "命令")
+    richTextSpan(handle, "  $ ", styleMuted())
+    richTextLine(handle, data.command, styleCommand())
+    if (data.explanation.summary.size > 0) {
+        styledField(handle, "摘要", data.explanation.summary, styleDefault())
+    }
+    richTextLine(handle)
+    styledSection(handle, "分解说明")
+    if (data.explanation.breakdown.size == 0) {
+        richTextLine(handle, "  模型没有提供分解说明。", styleMuted())
+    } else {
+        for (item in data.explanation.breakdown) {
+            styledField(handle, item.component, item.explanation, styleDefault())
+        }
+    }
+    richTextLine(handle)
+    styledSection(handle, "安全性")
+    richTextLine(handle, "  " + safetyMarker(data.safety.level) + " " + safetyLabel(data.safety.level), styleSafety(data.safety.level))
+    if (data.safety.warnings.size == 0) {
+        richTextLine(handle, "  没有安全警告。", styleMuted())
+    } else {
+        for (warning in data.safety.warnings) {
+            styledWrapped(handle, "  * " + warning, UI_WIDTH - 4, "    ", styleWarning())
+        }
+    }
+    richTextLine(handle)
+    styledOptionMenu(handle, resultMenu(data.interactive), selected)
+    styledKeys(handle, "上/下 选择  Enter 确认  R 运行  C 复制  M 修改  Esc 退出")
+}
+
+func styledExecute(handle: Int64, command: String, lines: ArrayList<String>, done: Bool, result: ?CommandResult): Unit {
+    richTextSpan(handle, "命令执行", styleTitle())
+    richTextSpan(handle, "  " + if (done) { "已结束" } else { "运行中" }, if (done) { styleSuccess() } else { styleInfo() })
+    richTextLine(handle)
+    richTextLine(handle)
+    styledSection(handle, "命令")
+    richTextSpan(handle, "  $ ", styleMuted())
+    richTextLine(handle, command, styleCommand())
+    richTextLine(handle)
+    styledSection(handle, "结果")
+    styledField(handle, "状态", if (done) { "已结束" } else { "运行中" }, if (done) { styleSuccess() } else { styleInfo() })
+    match (result) {
+        case Some(r) => styledField(handle, "退出码", "${r.exitCode}", if (r.exitCode == 0) { styleSuccess() } else { styleErrorText() })
+        case None => ()
+    }
+    richTextLine(handle)
+    styledSection(handle, "输出")
+    let start = if (lines.size > 14) { lines.size - 14 } else { 0 }
+    for (i in start..lines.size) {
+        let lineStyle = if (lines[i].startsWith("标准错误:")) { styleErrorText() } else { styleDefault() }
+        styledWrapped(handle, "  " + lines[i], UI_WIDTH - 2, "  ", lineStyle)
+    }
+    if (lines.size == 0) {
+        richTextLine(handle, "  还没有输出。", styleMuted())
+    }
+    styledKeys(handle, "Ctrl+C 中断  Esc 返回")
+}
+
+func styledPrompt(handle: Int64, state: TuiAppState): Unit {
+    if (state.promptMode == "investigate") {
+        match (state.investigate) {
+            case Some(data) => styledInvestigate(handle, data, state.selected)
+            case None => styledError(handle, "当前没有可用的调查请求。", false)
+        }
+    } else if (state.promptMode == "clarify") {
+        match (state.clarify) {
+            case Some(data) => styledTextPrompt(handle, "澄清", data.question, state.input, false)
+            case None => styledError(handle, "当前没有可用的澄清问题。", false)
+        }
+    } else {
+        styledTextPrompt(handle, "修改", state.errorMessage, state.input, false)
+    }
+}
+
+func styledInvestigate(handle: Int64, data: InvestigateData, selected: Int64): Unit {
+    richTextSpan(handle, "需要环境调查", styleTitle())
+    richTextSpan(handle, "  ${data.commands.size} 项检查", styleWarning())
+    richTextLine(handle)
+    richTextLine(handle)
+    styledSection(handle, "原因")
+    styledWrapped(handle, "  " + data.reason, UI_WIDTH - 2, "  ", styleDefault())
+    richTextLine(handle)
+    styledSection(handle, "诊断命令")
+    for (i in 0..data.commands.size) {
+        let cmd = data.commands[i]
+        let cursor = if (i == selected) { "  > " } else { "    " }
+        let mark = if (cmd.authorized) { "[x] " } else { "[ ] " }
+        richTextLine(handle, cursor + mark + cmd.command, if (i == selected) { styleSelected() } else { styleCommand() })
+        styledWrapped(handle, "      " + cmd.rationale, UI_WIDTH - 6, "      ", styleMuted())
+    }
+    styledKeys(handle, "Space 切换授权  Enter 运行已授权命令  R 全部授权  Esc 退出")
+}
+
+func styledTextPrompt(handle: Int64, title: String, question: String, current: String, sensitive: Bool): Unit {
+    richTextSpan(handle, title, styleTitle())
+    richTextSpan(handle, "  等待输入", styleInfo())
+    richTextLine(handle)
+    if (question.size > 0) {
+        richTextLine(handle)
+        styledSection(handle, "提示")
+        styledWrapped(handle, question, UI_WIDTH, "", styleDefault())
+    }
+    richTextLine(handle)
+    styledSection(handle, "输入")
+    richTextSpan(handle, "  > ", styleSelected())
+    if (sensitive) {
+        for (_ in 0..current.size) { richTextSpan(handle, "*", styleInput()) }
+        richTextLine(handle)
+    } else {
+        richTextLine(handle, current, styleInput())
+    }
+    styledKeys(handle, "Enter 提交  Esc 取消")
+}
+
+func styledError(handle: Int64, message: String, retryable: Bool): Unit {
+    richTextSpan(handle, "出现错误", styleErrorText())
+    if (retryable) {
+        richTextSpan(handle, "  可重试", styleWarning())
+    }
+    richTextLine(handle)
+    richTextLine(handle)
+    styledWrapped(handle, message, UI_WIDTH, "", styleDefault())
+    if (retryable) {
+        richTextLine(handle)
+        styledSection(handle, "恢复")
+        richTextLine(handle, "  按 Enter/R 重试上一次请求。", styleMuted())
+    }
+    styledKeys(handle, "Esc/Ctrl+C 退出")
+}
+
+func styledOptionMenu(handle: Int64, items: ArrayList<MenuItem>, selected: Int64): Unit {
+    styledSection(handle, "操作")
+    for (i in 0..items.size) {
+        let prefix = if (i == selected) { "  > " } else { "    " }
+        richTextLine(handle, prefix + items[i].label, if (i == selected) { styleSelected() } else { styleDefault() })
+    }
+}
+
+func styledSection(handle: Int64, title: String): Unit {
+    richTextLine(handle, title, styleSection())
+}
+
+func styledField(handle: Int64, label: String, value: String, valueStyle: RichStyle): Unit {
+    richTextSpan(handle, "  " + label + "：", styleMuted())
+    richTextLine(handle, value, valueStyle)
+}
+
+func styledWrapped(handle: Int64, text: String, width: Int64, indent: String, lineStyle: RichStyle): Unit {
+    for (raw in text.split("\n")) {
+        let wrapped = wrapLine(raw, width, indent)
+        for (line in wrapped.split("\n")) {
+            richTextLine(handle, line, lineStyle)
+        }
+    }
+}
+
+func styledKeys(handle: Int64, keys: String): Unit {
+    richTextLine(handle)
+    richTextSpan(handle, keys, styleMuted())
+}
+
+func styleSafety(level: SafetyLevel): RichStyle {
+    match (level) {
+        case SafetyLevel.Safe => styleSuccess()
+        case SafetyLevel.Caution => styleWarning()
+        case SafetyLevel.Danger => styleDanger()
+        case SafetyLevel.Privilege => styleErrorText()
+    }
+}
+
+func renderStyleDemo(terminal: Int64): Unit {
+    let _ = clearTerminalWidgets(terminal)
+    match (createBlockWidget("智能终端助手 » 样式预览")) {
+        case Ok(handle) =>
             let _ = setWidgetPosition(handle, 0, 0)
-            let _ = setWidgetSize(handle, 80, 24)
+            let _ = setWidgetSize(handle, 0, 0)
+            let _ = addWidgetToTerminal(terminal, handle)
+        case Err(_) => ()
+    }
+
+    match (createRichTextWidget()) {
+        case Ok(handle) =>
+            richTextSpan(handle, "已生成命令", styleTitle())
+            richTextSpan(handle, "  可运行", styleSuccess())
+            richTextLine(handle)
+            richTextLine(handle)
+
+            richTextLine(handle, "查询", styleSection())
+            richTextLine(handle, "  列出 /tmp 里的文件", styleDefault())
+            richTextLine(handle)
+
+            richTextLine(handle, "命令", styleSection())
+            richTextSpan(handle, "  $ ", styleMuted())
+            richTextLine(handle, "ls /tmp", styleCommand())
+            richTextLine(handle, "  摘要：列出临时目录中的文件和子目录。", styleDefault())
+            richTextLine(handle)
+
+            richTextLine(handle, "安全性", styleSection())
+            richTextSpan(handle, "  [+] 安全", styleSuccess())
+            richTextLine(handle, "  不修改文件系统。", styleMuted())
+            richTextLine(handle)
+
+            richTextLine(handle, "操作", styleSection())
+            richTextLine(handle, "  > 运行", styleSelected())
+            richTextLine(handle, "    复制", styleDefault())
+            richTextLine(handle, "    修改", styleDefault())
+            richTextLine(handle)
+
+            richTextSpan(handle, "Enter 确认  R 运行  C 复制  M 修改  Esc 退出", styleMuted())
+            let _ = setWidgetPosition(handle, 2, 1)
+            let _ = setWidgetSize(handle, 0, 0)
             let _ = addWidgetToTerminal(terminal, handle)
         case Err(_) => ()
     }
     let _ = drawTerminal(terminal)
+}
+
+func screenTitle(state: TuiAppState): String {
+    match (state.screen) {
+        case "loading" => "智能终端助手 » 思考中"
+        case "result" => "智能终端助手 » 结果"
+        case "execute" => "智能终端助手 » 执行"
+        case "prompt" =>
+            if (state.promptMode == "investigate") {
+                "智能终端助手 » 环境调查"
+            } else if (state.promptMode == "clarify") {
+                "智能终端助手 » 澄清"
+            } else {
+                "智能终端助手 » 修改"
+            }
+        case "error" => "智能终端助手 » 错误"
+        case _ => "智能终端助手"
+    }
 }
 
 func buildScreenText(state: TuiAppState, renderTick: Int64): String {
@@ -472,12 +801,12 @@ func buildScreenText(state: TuiAppState, renderTick: Int64): String {
         case "result" =>
             match (state.currentCommand) {
                 case Some(data) => renderResult(data, state.selected)
-                case None => renderError("No command is available.", false)
+                case None => renderError("当前没有可用命令。", false)
             }
         case "execute" => renderExecute(state.executeCommand, state.executeLines, state.executeDone, state.executeResult)
         case "prompt" => buildPromptText(state)
         case "error" => renderError(state.errorMessage, state.retryable)
-        case _ => "termhelper\n"
+        case _ => "智能终端助手\n"
     }
 }
 
@@ -485,14 +814,14 @@ func buildPromptText(state: TuiAppState): String {
     if (state.promptMode == "investigate") {
         match (state.investigate) {
             case Some(data) => renderInvestigate(data, state.selected)
-            case None => renderError("No investigation request is available.", false)
+            case None => renderError("当前没有可用的调查请求。", false)
         }
     } else if (state.promptMode == "clarify") {
         match (state.clarify) {
-            case Some(data) => renderTextPrompt("clarify", data.question, state.input, false)
-            case None => renderError("No clarification question is available.", false)
+            case Some(data) => renderTextPrompt("澄清", data.question, state.input, false)
+            case None => renderError("当前没有可用的澄清问题。", false)
         }
     } else {
-        renderTextPrompt("modify", state.errorMessage, state.input, false)
+        renderTextPrompt("修改", state.errorMessage, state.input, false)
     }
 }

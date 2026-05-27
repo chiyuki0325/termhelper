@@ -36,6 +36,8 @@ main(args: Array<String>): Int64 {
                     return 1
                 }
                 return runDebug(joinArgsFrom(args, 1))
+            case "--tui-demo" =>
+                return runTuiDemo()
             case "--help" =>
                 printHelp()
                 return 0
@@ -60,6 +62,7 @@ func printHelp(): Unit {
     println("  termhelper --install          安装 Shell 集成 (alias/def 写入 RC 文件)")
     println("  termhelper --uninstall        卸载 Shell 集成 (从 RC 文件移除)")
     println("  termhelper --debug <查询>     CLI 调试模式，打印 LLMResponse JSON")
+    println("  termhelper --tui-demo         展示彩色 TUI 样式预览")
     println("  termhelper --help             打印此帮助信息")
     println()
     println("示例:")
@@ -133,6 +136,15 @@ func runQueryTui(query: String): Int64 {
         case Ok(_) => 0
         case Err(e) =>
             println("TUI 启动失败: ${e.message}")
+            1
+    }
+}
+
+func runTuiDemo(): Int64 {
+    match (runStyleDemo()) {
+        case Ok(_) => 0
+        case Err(e) =>
+            println("TUI 样式预览启动失败: ${e.message}")
             1
     }
 }

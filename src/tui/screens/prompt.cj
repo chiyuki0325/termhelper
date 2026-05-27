@@ -1,36 +1,40 @@
 package termhelper.tui.screens
 
 import termhelper.types.*
+import termhelper.tui.components.*
 import std.collection.*
 
 public func renderInvestigate(data: InvestigateData, selected: Int64): String {
-    var out = "termhelper - investigation\n"
-    out += "==========================\n\n"
-    out += "Reason\n"
-    out += "  ${data.reason}\n\n"
-    out += "Diagnostic commands\n"
+    var out = screenHeader("需要环境调查", "${data.commands.size} 项检查")
+    out += sectionTitle("原因")
+    out += "  " + wrapLine(data.reason, UI_WIDTH - 2, "  ") + "\n"
+    out += sectionTitle("诊断命令")
     for (i in 0..data.commands.size) {
         let cmd = data.commands[i]
-        let cursor = if (i == selected) { "> " } else { "  " }
+        let cursor = if (i == selected) { "  > " } else { "    " }
         let mark = if (cmd.authorized) { "[x] " } else { "[ ] " }
         out += cursor + mark + cmd.command + "\n"
-        out += "      " + cmd.rationale + "\n"
+        out += "      " + wrapLine(cmd.rationale, UI_WIDTH - 6, "      ") + "\n"
     }
-    out += "\nSpace: toggle  Enter: run authorized  R: authorize all  Esc: exit\n"
+    out += keyBar("Space 切换授权  Enter 运行已授权命令  R 全部授权  Esc 退出")
     out
 }
 
 public func renderTextPrompt(title: String, question: String, current: String, sensitive: Bool): String {
-    var out = "termhelper - ${title}\n"
-    out += "====================\n\n"
-    out += question + "\n\n"
-    out += "> "
+    var out = screenHeader(title, "等待输入")
+    if (question.size > 0) {
+        out += sectionTitle("提示")
+        out += wrapLine(question, UI_WIDTH, "") + "\n"
+    }
+    out += sectionTitle("输入")
+    out += "  > "
     if (sensitive) {
         for (_ in 0..current.size) { out += "*" }
     } else {
         out += current
     }
-    out += "\n\nEnter: submit  Esc: cancel\n"
+    out += "\n"
+    out += keyBar("Enter 提交  Esc 取消")
     out
 }
 

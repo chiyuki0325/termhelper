@@ -3,20 +3,19 @@ package termhelper.tui.screens
 import termhelper.tui.components.*
 
 public func renderLoading(query: String, tick: Int64, streamedText: String, retryText: String): String {
-    var out = "termhelper\n"
-    out += "==========\n\n"
-    out += "${spinnerFrame(tick)} Generating command for:\n"
-    out += "  ${query}\n\n"
+    var out = screenHeader("正在生成命令", spinnerFrame(tick))
+    out += sectionTitle("查询")
+    out += "  " + wrapLine(query, UI_WIDTH - 2, "  ") + "\n"
     if (retryText.size > 0) {
-        out += "Retry\n"
-        out += "  ${retryText}\n\n"
+        out += sectionTitle("重试")
+        out += "  " + wrapLine(retryText, UI_WIDTH - 2, "  ") + "\n"
     }
-    out += "Model output\n"
+    out += sectionTitle("模型响应")
     if (streamedText.size == 0) {
-        out += "  Waiting for provider response...\n"
+        out += emptyState("正在等待模型响应...")
     } else {
-        out += streamedText + "\n"
+        out += wrapLine(streamedText, UI_WIDTH, "") + "\n"
     }
-    out += "\nEsc/Ctrl+C: exit\n"
+    out += keyBar("Esc/Ctrl+C 退出")
     out
 }
