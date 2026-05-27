@@ -92,14 +92,15 @@ func environmentInvestigationPolicy(): String {
 
 Environment investigation policy:
 - Do not guess the user's distribution, package manager, init/service manager, shell-specific features, or whether optional tools are installed.
+- Known environment facts are usable evidence. If they explicitly identify a needed package manager, service manager, shell, or optional tool, you may generate a command that uses it.
 - Built-in POSIX/coreutils-style commands that are normally preinstalled on Linux may be returned directly when they solve the request: cd, pwd, ls, cp, mv, rm, mkdir, rmdir, touch, cat, head, tail, grep, find, xargs, sort, uniq, wc, cut, tr, sed, awk, chmod, chown, ln, du, df, ps, kill, date, env, printenv, uname, tar, gzip.
-- If the command would use non-standard/optional tools, distribution-specific commands, package managers, service managers, system configuration tools, language runtimes, container tools, cloud CLIs, or desktop/session tools, return type "investigate" first.
-- For package installation, removal, upgrade, repository configuration, or system update requests, always investigate first. Do this even when Environment context already lists a distro or packageManager.
-- Environment context is only background information. It is not enough to skip investigation for package managers, service managers, distro-specific commands, or optional tools.
+- If the command would use non-standard/optional tools, distribution-specific commands, package managers, service managers, system configuration tools, language runtimes, container tools, cloud CLIs, or desktop/session tools, return type "investigate" first unless Known environment facts or current-conversation investigation results confirm the needed tool exists.
+- For package installation, removal, upgrade, repository configuration, or system update requests, use Known environment facts when they identify a suitable package manager. Investigate only when no suitable package manager fact exists, facts conflict, or the requested operation needs missing environment details.
+- When multiple package managers are known, prefer the distro-native system package manager for system packages and system updates. Use flatpak/snap only for Flatpak/Snap apps, unless the user asks for them.
 - After the user runs an investigation and sends the diagnostic results back in the current conversation, then use those results to generate the final command.
 - Investigation commands must be read-only and narrowly scoped, such as cat /etc/os-release, command -v <tool>, uname -a, printf '%s\n' "$SHELL", or systemctl --version.
 - When investigating package managers, probe from less common to more common and keep apt-get last: rpm-ostree, swupd, xbps-install, eopkg, guix, nix, home-manager, emerge, apk, zypper, dnf, yum, pacman, oma, flatpak, snap, apt, apt-get.
-- Do not output rpm-ostree, swupd, xbps-install, eopkg, guix, nix, home-manager, emerge, apk, zypper, dnf, yum, pacman, oma, flatpak, snap, apt, apt-get, systemctl, service, rc-service, brew, docker, kubectl, npm, pip, cargo, go, rustup, conda, code, xclip, wl-copy, or similar optional commands before current-conversation investigation results confirm they exist.
+- Do not output rpm-ostree, swupd, xbps-install, eopkg, guix, nix, home-manager, emerge, apk, zypper, dnf, yum, pacman, oma, flatpak, snap, apt, apt-get, systemctl, service, rc-service, brew, docker, kubectl, npm, pip, cargo, go, rustup, conda, code, xclip, wl-copy, or similar optional commands before Known environment facts or current-conversation investigation results confirm they exist.
 """
 }
 

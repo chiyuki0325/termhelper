@@ -159,8 +159,15 @@ A: {"type":"command","data":{"command":"ls -la","explanation":{"summary":"列出
 Q: 系统用的什么包管理器
 A: {"type":"investigate","data":{"reason":"需要先识别 Linux 发行版和可用包管理器，不能猜测发行版相关命令","commands":[{"command":"cat /etc/os-release","rationale":"识别当前 Linux 发行版"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"按从冷门到热门的顺序检查系统中实际存在的包管理器"}]}}
 
-Q: 安装 htop
-A: {"type":"investigate","data":{"reason":"安装软件需要使用发行版相关的包管理器，必须先调查当前系统实际可用的工具","commands":[{"command":"cat /etc/os-release","rationale":"识别当前 Linux 发行版"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"按从冷门到热门的顺序检查系统中实际存在的包管理器"}]}}
+Q: 没有环境事实时安装 htop
+A: {"type":"investigate","data":{"reason":"安装软件需要使用发行版相关的包管理器，但当前没有可用的包管理器事实，必须先调查实际可用的工具","commands":[{"command":"cat /etc/os-release","rationale":"识别当前 Linux 发行版"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"按从冷门到热门的顺序检查系统中实际存在的包管理器"}]}}
+
+Q: 已知环境事实:
+- id=distro.current: 当前系统发行版 ID 是 aosc。
+- id=packageManager.oma: 系统中存在包管理器 oma，路径是 /usr/bin/oma。
+- id=packageManager.apt: 系统中存在包管理器 apt，路径是 /usr/bin/apt。
+更新系统
+A: {"type":"command","data":{"command":"sudo oma upgrade","explanation":{"summary":"使用已知存在的 oma 包管理器更新系统","breakdown":[{"component":"sudo","explanation":"以管理员权限运行系统更新命令"},{"component":"oma","explanation":"环境事实中已确认存在的包管理器"},{"component":"upgrade","explanation":"升级系统中可更新的软件包"}]},"interactive":true,"safety":{"level":"privilege","warnings":["系统更新需要管理员权限","更新过程中可能安装、升级或移除软件包，请确认操作摘要"]}}}
 
 Q: 环境调查结果:
 $ cat /etc/os-release
@@ -188,8 +195,15 @@ A: {"type":"command","data":{"command":"ls -la","explanation":{"summary":"List f
 Q: Which package manager does this system use?
 A: {"type":"investigate","data":{"reason":"Need to identify the Linux distribution and available package manager instead of guessing distro-specific commands","commands":[{"command":"cat /etc/os-release","rationale":"Identify the Linux distribution"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"Check package managers from less common to more common, with apt-get last"}]}}
 
-Q: Install htop
-A: {"type":"investigate","data":{"reason":"Installing software requires a distribution-specific package manager, so the current system tools must be investigated first","commands":[{"command":"cat /etc/os-release","rationale":"Identify the Linux distribution"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"Check package managers from less common to more common, with apt-get last"}]}}
+Q: Install htop when no environment facts are known
+A: {"type":"investigate","data":{"reason":"Installing software requires a distribution-specific package manager, but no package manager fact is available, so the current system tools must be investigated first","commands":[{"command":"cat /etc/os-release","rationale":"Identify the Linux distribution"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"Check package managers from less common to more common, with apt-get last"}]}}
+
+Q: Known environment facts:
+- id=distro.current: The current distribution ID is aosc.
+- id=packageManager.oma: The system has package manager oma at /usr/bin/oma.
+- id=packageManager.apt: The system has package manager apt at /usr/bin/apt.
+Update the system
+A: {"type":"command","data":{"command":"sudo oma upgrade","explanation":{"summary":"Update the system with the known available oma package manager","breakdown":[{"component":"sudo","explanation":"Run the system update command with administrator privileges"},{"component":"oma","explanation":"Package manager confirmed by environment facts"},{"component":"upgrade","explanation":"Upgrade installed packages that have available updates"}]},"interactive":true,"safety":{"level":"privilege","warnings":["System updates require administrator privileges","The update may install, upgrade, or remove packages; review the transaction summary"]}}}
 
 Q: Environment investigation results:
 $ cat /etc/os-release
