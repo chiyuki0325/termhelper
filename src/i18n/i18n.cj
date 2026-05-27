@@ -153,28 +153,58 @@ public func llmObjectModeExamples(): String {
 Q: 删除所有tmp开头的文件夹
 A: {"type":"command","data":{"command":"rm -rf /tmp/tmp*","explanation":{"summary":"递归删除 /tmp 中名称以 tmp 开头的目录和文件","breakdown":[{"component":"rm","explanation":"删除文件或目录的命令"},{"component":"-rf","explanation":"递归并强制删除目录及其内容，不进行交互确认"},{"component":"/tmp/tmp*","explanation":"匹配 /tmp 中所有以 tmp 开头的项目"}]},"interactive":false,"safety":{"level":"danger","warnings":["带通配符的递归删除操作具有破坏性","删除后无法撤销","执行前请确认通配符只匹配目标路径"]}}}
 
-Q: 我的ip地址是什么
-A: {"type":"command","data":{"command":"ip addr show","explanation":{"summary":"显示所有网络接口及其 IP 地址","breakdown":[{"component":"ip","explanation":"Linux 网络配置工具"},{"component":"addr","explanation":"地址管理子命令"},{"component":"show","explanation":"显示当前地址信息"}]},"interactive":false,"safety":{"level":"safe","warnings":[]}}}
+Q: 当前目录有哪些文件
+A: {"type":"command","data":{"command":"ls -la","explanation":{"summary":"列出当前目录中的文件和目录，包括隐藏项目和详细信息","breakdown":[{"component":"ls","explanation":"列出目录内容的常用命令"},{"component":"-la","explanation":"显示隐藏项目并使用长格式输出"}]},"interactive":false,"safety":{"level":"safe","warnings":[]}}}
 
 Q: 系统用的什么包管理器
-A: {"type":"investigate","data":{"reason":"需要先识别 Linux 发行版和可用包管理器，才能安全生成安装命令","commands":[{"command":"cat /etc/os-release","rationale":"识别当前 Linux 发行版"},{"command":"command -v apt-get dnf pacman zypper apk 2>/dev/null","rationale":"检查系统中可用的包管理器"}]}}
+A: {"type":"investigate","data":{"reason":"需要先识别 Linux 发行版和可用包管理器，不能猜测发行版相关命令","commands":[{"command":"cat /etc/os-release","rationale":"识别当前 Linux 发行版"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"按从冷门到热门的顺序检查系统中实际存在的包管理器"}]}}
+
+Q: 安装 htop
+A: {"type":"investigate","data":{"reason":"安装软件需要使用发行版相关的包管理器，必须先调查当前系统实际可用的工具","commands":[{"command":"cat /etc/os-release","rationale":"识别当前 Linux 发行版"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"按从冷门到热门的顺序检查系统中实际存在的包管理器"}]}}
+
+Q: 环境调查结果:
+$ cat /etc/os-release
+exit=0
+stdout:
+ID=arch
+NAME="Arch Linux"
+$ for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v "$p"; done
+exit=0
+stdout:
+/usr/bin/pacman
+A: {"type":"command","data":{"command":"sudo pacman -S htop","explanation":{"summary":"使用 pacman 安装 htop","breakdown":[{"component":"sudo","explanation":"以管理员权限运行安装命令"},{"component":"pacman","explanation":"Arch Linux 的包管理器"},{"component":"-S","explanation":"同步并安装指定软件包"},{"component":"htop","explanation":"要安装的软件包名称"}]},"interactive":true,"safety":{"level":"privilege","warnings":["安装软件需要管理员权限","执行前请确认软件包名称正确"]},"factEdits":[{"op":"add","id":"distro.current","oldText":"","newText":"当前系统发行版是 Arch Linux，/etc/os-release 中 ID=arch。","source":"cat /etc/os-release","reason":"诊断输出明确包含 ID=arch 和 Arch Linux 名称"},{"op":"add","id":"packageManager.pacman","oldText":"","newText":"当前系统存在包管理器 pacman，路径是 /usr/bin/pacman。","source":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","reason":"诊断输出显示 pacman 路径"}]}}
 
 Q: 帮我安装一个东西
-A: {"type":"clarify","data":{"question":"你想安装什么软件？当前系统是哪种 Linux 发行版？例如 Ubuntu/Debian、Fedora/RHEL、Arch 或 Alpine。"}}
+A: {"type":"clarify","data":{"question":"你想安装什么软件？"}}
 """
     } else {
         """
 Q: Delete all folders starting with tmp
 A: {"type":"command","data":{"command":"rm -rf /tmp/tmp*","explanation":{"summary":"Recursively delete all directories and files in /tmp whose names start with tmp","breakdown":[{"component":"rm","explanation":"File removal command"},{"component":"-rf","explanation":"Recursive and force flags: delete directories and contents without prompting"},{"component":"/tmp/tmp*","explanation":"Glob pattern matching all items in /tmp starting with tmp"}]},"interactive":false,"safety":{"level":"danger","warnings":["Destructive recursive removal with wildcard","No undo possible","Verify the glob pattern matches intended targets before running"]}}}
 
-Q: What is my IP address?
-A: {"type":"command","data":{"command":"ip addr show","explanation":{"summary":"Display all network interfaces and their IP addresses","breakdown":[{"component":"ip","explanation":"Network configuration tool"},{"component":"addr","explanation":"Address subcommand"},{"component":"show","explanation":"Display current addresses"}]},"interactive":false,"safety":{"level":"safe","warnings":[]}}}
+Q: What files are in this directory?
+A: {"type":"command","data":{"command":"ls -la","explanation":{"summary":"List files and directories in the current directory, including hidden entries and details","breakdown":[{"component":"ls","explanation":"Common command for listing directory contents"},{"component":"-la","explanation":"Show hidden entries and use long output format"}]},"interactive":false,"safety":{"level":"safe","warnings":[]}}}
 
 Q: Which package manager does this system use?
-A: {"type":"investigate","data":{"reason":"Need to determine the Linux distribution and available package manager before generating install commands","commands":[{"command":"cat /etc/os-release","rationale":"Identify the Linux distribution"},{"command":"command -v apt-get dnf pacman zypper apk 2>/dev/null","rationale":"Check which package managers are available"}]}}
+A: {"type":"investigate","data":{"reason":"Need to identify the Linux distribution and available package manager instead of guessing distro-specific commands","commands":[{"command":"cat /etc/os-release","rationale":"Identify the Linux distribution"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"Check package managers from less common to more common, with apt-get last"}]}}
+
+Q: Install htop
+A: {"type":"investigate","data":{"reason":"Installing software requires a distribution-specific package manager, so the current system tools must be investigated first","commands":[{"command":"cat /etc/os-release","rationale":"Identify the Linux distribution"},{"command":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","rationale":"Check package managers from less common to more common, with apt-get last"}]}}
+
+Q: Environment investigation results:
+$ cat /etc/os-release
+exit=0
+stdout:
+ID=arch
+NAME="Arch Linux"
+$ for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v "$p"; done
+exit=0
+stdout:
+/usr/bin/pacman
+A: {"type":"command","data":{"command":"sudo pacman -S htop","explanation":{"summary":"Install htop with pacman","breakdown":[{"component":"sudo","explanation":"Run the install command with administrator privileges"},{"component":"pacman","explanation":"Package manager used by Arch Linux"},{"component":"-S","explanation":"Synchronize and install the requested package"},{"component":"htop","explanation":"Package name to install"}]},"interactive":true,"safety":{"level":"privilege","warnings":["Installing software requires administrator privileges","Confirm the package name before running"]},"factEdits":[{"op":"add","id":"distro.current","oldText":"","newText":"The current distribution is Arch Linux; /etc/os-release contains ID=arch.","source":"cat /etc/os-release","reason":"The diagnostic output explicitly contains ID=arch and the Arch Linux name"},{"op":"add","id":"packageManager.pacman","oldText":"","newText":"The current system has package manager pacman at /usr/bin/pacman.","source":"for p in rpm-ostree swupd xbps-install eopkg guix nix home-manager emerge apk zypper dnf yum pacman oma flatpak snap apt apt-get; do command -v \"$p\"; done","reason":"The diagnostic output shows the pacman path"}]}}
 
 Q: Help me install something
-A: {"type":"clarify","data":{"question":"What software would you like to install, and on which Linux distribution? For example Ubuntu/Debian, Fedora/RHEL, Arch, or Alpine."}}
+A: {"type":"clarify","data":{"question":"What software would you like to install?"}}
 """
     }
 }
@@ -309,8 +339,8 @@ func zhText(key: String): String {
         case "local_privilege_warning" => "本地安全兜底检测到提权或系统级操作。"
         case "wl_copy_failed" => "wl-copy 执行失败"
         case "xclip_failed" => "xclip 执行失败"
-        case "install_wl_clipboard" => "请安装 wl-clipboard: sudo apt install wl-clipboard"
-        case "install_xclip" => "请安装 xclip: sudo apt install xclip"
+        case "install_wl_clipboard" => "请使用当前发行版的包管理器安装 wl-clipboard"
+        case "install_xclip" => "请使用当前发行版的包管理器安装 xclip"
         case "shell_already_installed" => "termhelper 似乎已经安装过了"
         case "shell_installed_to" => "已安装 Shell 集成到"
         case "shell_source_hint" => "请运行: source"
@@ -425,8 +455,8 @@ func enText(key: String): String {
         case "local_privilege_warning" => "Local safety fallback detected privilege escalation or system-level operations."
         case "wl_copy_failed" => "wl-copy failed"
         case "xclip_failed" => "xclip failed"
-        case "install_wl_clipboard" => "Install wl-clipboard: sudo apt install wl-clipboard"
-        case "install_xclip" => "Install xclip: sudo apt install xclip"
+        case "install_wl_clipboard" => "Install wl-clipboard with this distribution's package manager"
+        case "install_xclip" => "Install xclip with this distribution's package manager"
         case "shell_already_installed" => "termhelper appears to already be installed"
         case "shell_installed_to" => "Installed shell integration to"
         case "shell_source_hint" => "Run: source"

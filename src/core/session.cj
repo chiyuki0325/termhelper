@@ -42,6 +42,7 @@ public class Session {
     private var context: EnvironmentContext
     private let requestBuilder: RequestBuilder
     private let contextManager: ContextManager
+    private let lastInvestigationSources: ArrayList<String>
     public let history: ArrayList<Message>
 
     public init(provider: LLMProvider, config: Config, context: EnvironmentContext) {
@@ -50,6 +51,7 @@ public class Session {
         this.context = context
         this.requestBuilder = RequestBuilder()
         this.contextManager = ContextManager()
+        this.lastInvestigationSources = ArrayList<String>()
         this.history = ArrayList<Message>()
     }
 
@@ -73,6 +75,7 @@ public class Session {
 
         // FR-03/FR-08: 合并环境调查结论
         applyContextUpdates(response)
+        applyFactEdits(checked)
 
         history.add(makeMessage(MessageRole.Assistant, llmResponseToJsonString(checked)))
         match (checked) {
@@ -86,6 +89,13 @@ public class Session {
         context = ctx
     }
 
+    public func setInvestigationSources(commands: ArrayList<String>): Unit {
+        lastInvestigationSources.clear()
+        for (cmd in commands) {
+            lastInvestigationSources.add(cmd)
+        }
+    }
+
     /// 合并 InvestigateData 中的上下文更新 delta 并持久化
     private func applyContextUpdates(resp: LLMResponse): Unit {
         match (resp) {
@@ -93,6 +103,20 @@ public class Session {
                 if (data.contextUpdates.size > 0) {
                     context = contextManager.update(context, data.contextUpdates)
                     contextManager.save(context)
+                }
+            case _ => ()
+        }
+    }
+
+    private func applyFactEdits(resp: LLMResponse): Unit {
+        match (resp) {
+            case LLMResponse.Command(data) =>
+                if (data.factEdits.size > 0) {
+                    context = contextManager.applyFactEdits(context, data.factEdits, lastInvestigationSources)
+                    contextManager.save(context)
+                }
+                if (lastInvestigationSources.size > 0) {
+                    lastInvestigationSources.clear()
                 }
             case _ => ()
         }

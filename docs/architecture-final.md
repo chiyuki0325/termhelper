@@ -246,6 +246,17 @@ class CommandData {
     var explanation: Explanation = Explanation()
     var interactive: Bool = false
     var safety: SafetyInfo = SafetyInfo()
+    var factEdits: ArrayList<FactEdit> = ArrayList<FactEdit>()
+}
+
+@JsonAdapter
+class FactEdit {
+    var op: String = ""        // add | update | delete
+    var id: String = ""        // stable fact id, e.g. packageManager.pacman
+    var oldText: String = ""   // required for update/delete, exact current text
+    var newText: String = ""   // required for add/update
+    var source: String = ""    // exact diagnostic command from current investigation
+    var reason: String = ""
 }
 
 @JsonAdapter
@@ -275,7 +286,7 @@ enum SafetyLevel {
 class InvestigateData {
     var reason: String = ""
     var commands: ArrayList<DiagnosticCommand> = ArrayList<DiagnosticCommand>()
-    var contextUpdates: HashMap<String, String> = HashMap<String, String>()  // FR-03: 调查结论写回 context.json
+    var contextUpdates: HashMap<String, String> = HashMap<String, String>()  // deprecated compatibility field
 }
 
 @JsonAdapter
@@ -308,17 +319,18 @@ enum MessageRole {
 
 struct EnvironmentContext {
     version: Int64             // 结构版本号，用于迁移
-    os: Option<String>
-    distro: Option<String>
-    packageManager: Option<String>
-    shell: String              // 从 SHELL 环境变量获取
-    tools: HashMap<String, String>
-    extras: HashMap<String, String>
+    facts: HashMap<String, EnvironmentFact>
     lastUpdated: Int64
+}
+
+struct EnvironmentFact {
+    text: String               // 自然语言事实
+    source: String             // initial local detection / diagnostic command
+    lastVerified: Int64
 }
 ```
 
-> `version` 字段用于 `ContextMigration` 模块：加载 context.json 时检查版本，不兼容时按迁移链逐版本升级（如 v1→v2 新增字段设默认值）；版本过新无法降级时丢弃并重新调查。
+> v4 起 context.json 只持久化 `facts`。发行版、包管理器、工具等都以稳定 ID 的自然语言 fact 保存；Shell 不持久化为 fact，而是在构造 prompt 时于 Known environment facts 之后动态注入。
 
 ### 3.3 PTY Agentic 工具集 (types/pty.cj)
 

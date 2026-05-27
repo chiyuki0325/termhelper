@@ -1,5 +1,7 @@
 package termhelper.infra
 
+import std.collection.ArrayList
+
 // ═══════════════════════════════════════════════════════════════
 // 公共工具 — 环境变量 + 字符串 + 通用 FFI 声明
 // ═══════════════════════════════════════════════════════════════
@@ -88,17 +90,17 @@ public func strFind(haystack: String, needle: String): Int64 {
 
 public func fdReadAll(fd: Int32): String {
     unsafe {
-        var result = ""
+        let bytes = ArrayList<UInt8>()
         let buf = LibC.malloc<UInt8>(count: 4096)
         var n = read(fd, buf, 4096)
         while (n > 0) {
             for (i in 0..n) {
-                result += String(Rune(Int32(buf.read(i))))
+                bytes.add(buf.read(i))
             }
             n = read(fd, buf, 4096)
         }
         LibC.free(buf)
-        result
+        String.fromUtf8(bytes.toArray())
     }
 }
 

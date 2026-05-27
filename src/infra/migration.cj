@@ -2,7 +2,7 @@ package termhelper.infra
 
 import stdx.encoding.json.*
 
-public let CURRENT_CONTEXT_VERSION: Int64 = 2
+public let CURRENT_CONTEXT_VERSION: Int64 = 4
 
 /// Migrate a persisted context object to CURRENT_CONTEXT_VERSION.
 /// Returns None when the file is from a newer unsupported version or is invalid.
@@ -17,6 +17,12 @@ public func migrateContextJson(value: JsonValue): ?JsonObject {
             if (version == 1) {
                 obj = migrateV1ToV2(obj)
                 version = 2
+            } else if (version == 2) {
+                obj = migrateV2ToV3(obj)
+                version = 3
+            } else if (version == 3) {
+                obj = migrateV3ToV4(obj)
+                version = 4
             } else {
                 return None
             }
@@ -40,7 +46,7 @@ func migrateV1ToV2(old: JsonObject): JsonObject {
             case None => obj.put("packageManager", JsonString(""))
         }
     }
-    obj.put("shell", JsonString(migrationJsonGetString(old, "shell", envGetShell())))
+    obj.put("shell", JsonString(migrationJsonGetString(old, "shell", "")))
     match (old.get("tools")) {
         case Some(v) => obj.put("tools", v)
         case None => obj.put("tools", JsonObject())
@@ -56,6 +62,118 @@ func migrateV1ToV2(old: JsonObject): JsonObject {
             case None => obj.put("lastUpdated", JsonInt(0))
         }
     }
+    obj
+}
+
+/// v2 -> v3 adds natural-language environment facts keyed by stable IDs.
+func migrateV2ToV3(old: JsonObject): JsonObject {
+    let obj = JsonObject()
+    obj.put("version", JsonInt(3))
+    obj.put("os", jsonGetOrNullString(old, "os"))
+    obj.put("distro", jsonGetOrNullString(old, "distro"))
+    match (old.get("packageManager")) {
+        case Some(v) => obj.put("packageManager", v)
+        case None => obj.put("packageManager", JsonString(""))
+    }
+    obj.put("shell", JsonString(migrationJsonGetString(old, "shell", "")))
+    match (old.get("tools")) {
+        case Some(v) => obj.put("tools", v)
+        case None => obj.put("tools", JsonObject())
+    }
+    match (old.get("extras")) {
+        case Some(v) => obj.put("extras", v)
+        case None => obj.put("extras", JsonObject())
+    }
+    match (old.get("lastUpdated")) {
+        case Some(v) => obj.put("lastUpdated", v)
+        case None => obj.put("lastUpdated", JsonInt(0))
+    }
+    obj.put("facts", buildFactsFromV2(old))
+    obj
+}
+
+/// v3 -> v4 keeps only facts + lastUpdated as the persisted environment model.
+/// Shell is deliberately excluded because it is injected dynamically into prompts.
+func migrateV3ToV4(old: JsonObject): JsonObject {
+    let obj = JsonObject()
+    obj.put("version", JsonInt(4))
+    obj.put("lastUpdated", match (old.get("lastUpdated")) {
+        case Some(v) => v
+        case None => JsonInt(0)
+    })
+    obj.put("facts", buildFactsFromLegacyObject(old))
+    obj
+}
+
+func buildFactsFromLegacyObject(old: JsonObject): JsonObject {
+    let facts = match (old.get("facts")) {
+        case Some(v) => match (v.kind()) {
+            case JsObject => v.asObject()
+            case _ => JsonObject()
+        }
+        case None => JsonObject()
+    }
+    let ts = migrationJsonGetInt(old, "lastUpdated", 0)
+
+    let os = migrationJsonGetString(old, "os", "")
+    if (os.size > 0 && !facts.containsKey("os.uname")) {
+        facts.put("os.uname", factJson("当前系统内核名称是 ${os}。", "migrated context.os", ts))
+    }
+
+    let distro = migrationJsonGetString(old, "distro", "")
+    if (distro.size > 0 && !facts.containsKey("distro.current")) {
+        facts.put("distro.current", factJson("当前系统发行版 ID 是 ${distro}。", "migrated context.distro", ts))
+    }
+
+    let packageManager = migrationJsonGetString(old, "packageManager", "")
+    if (packageManager.size > 0) {
+        let id = "packageManager.${migrationFactIdSuffix(packageManager)}"
+        if (!facts.containsKey(id)) {
+            facts.put(id, factJson("当前记录的包管理器是 ${packageManager}。", "migrated context.packageManager", ts))
+        }
+    }
+
+    facts
+}
+
+func buildFactsFromV2(old: JsonObject): JsonObject {
+    let facts = JsonObject()
+    let ts = migrationJsonGetInt(old, "lastUpdated", 0)
+    let distro = migrationJsonGetString(old, "distro", "")
+    if (distro.size > 0) {
+        facts.put("distro.current", factJson("当前系统发行版 ID 是 ${distro}。", "migrated context.distro", ts))
+    }
+    let packageManager = migrationJsonGetString(old, "packageManager", "")
+    if (packageManager.size > 0) {
+        let id = "packageManager.${migrationFactIdSuffix(packageManager)}"
+        facts.put(
+            id,
+            factJson("当前记录的包管理器是 ${packageManager}。", "migrated context.packageManager", ts)
+        )
+    }
+    facts
+}
+
+func migrationFactIdSuffix(raw: String): String {
+    var out = ""
+    for (i in 0..raw.size) {
+        let b = raw[i]
+        let ok = (b >= b'a' && b <= b'z') || (b >= b'A' && b <= b'Z') || (b >= b'0' && b <= b'9') ||
+            b == b'.' || b == b'_' || b == b'-'
+        if (ok) {
+            out += String(Rune(Int32(b)))
+        } else {
+            out += "_"
+        }
+    }
+    if (out.size == 0) { "unknown" } else { out }
+}
+
+func factJson(text: String, source: String, lastVerified: Int64): JsonObject {
+    let obj = JsonObject()
+    obj.put("text", JsonString(text))
+    obj.put("source", JsonString(source))
+    obj.put("lastVerified", JsonInt(lastVerified))
     obj
 }
 

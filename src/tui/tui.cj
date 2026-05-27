@@ -500,9 +500,11 @@ func runInvestigationTask(queue: AppEventQueue, session: Session, data: Investig
     spawn {
         => try {
             let outputs = ArrayList<String>()
+            let executedCommands = ArrayList<String>()
             for (cmd in data.commands) {
                 if (cmd.authorized) {
                     let result = spawnCommandWithTimeout(cmd.command, timeoutSec * 1000)
+                    executedCommands.add(cmd.command)
                     var entry = "$ ${cmd.command}\n"
                     entry += "exit=${result.exitCode}\n"
                     if (result.stdout.size > 0) {
@@ -514,6 +516,7 @@ func runInvestigationTask(queue: AppEventQueue, session: Session, data: Investig
                     outputs.add(entry)
                 }
             }
+            session.setInvestigationSources(executedCommands)
             let response = session.modify(investigationSummary(data, outputs))
             queue.push(AppEvent.LLMDone(response))
         } catch (e: Exception) {

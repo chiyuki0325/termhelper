@@ -35,6 +35,7 @@ func applyCommandSafetyFallback(data: CommandData): CommandData {
         newData.interactive = data.interactive
         newData.safety.level = SafetyLevel.Danger
         newData.safety.warnings = warnings
+        newData.factEdits = data.factEdits
         return newData
     }
 
@@ -46,6 +47,7 @@ func applyCommandSafetyFallback(data: CommandData): CommandData {
         newData.interactive = data.interactive
         newData.safety.level = SafetyLevel.Privilege
         newData.safety.warnings = warnings
+        newData.factEdits = data.factEdits
         return newData
     }
 
@@ -82,12 +84,21 @@ func containsPrivilege(command: String): Bool {
             " su ",
             "systemctl ",
             "service ",
-            "apt-get ",
+            "rpm-ostree ",
+            "swupd ",
+            "xbps-install ",
+            "eopkg ",
+            "guix ",
+            "nix ",
+            "emerge ",
+            "apk add",
+            "zypper ",
             "dnf ",
             "yum ",
             "pacman ",
-            "zypper ",
-            "apk add",
+            "oma ",
+            "apt ",
+            "apt-get ",
             "mount ",
             "umount "
         ]

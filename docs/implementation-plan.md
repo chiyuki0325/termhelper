@@ -197,7 +197,7 @@
 | 任务 | 说明 | 预估人天 | 可并行 |
 |------|------|----------|--------|
 | 实现 `infra/migration.cj` | 上下文版本迁移框架：迁移链注册机制（`v1→v2→...→vn` 的迁移函数），加载时检查 `version` 字段 → 若低于当前版本则逐版本迁移 → 若高于当前版本（降级）则丢弃并重新调查。每个迁移函数负责从 vN 到 vN+1 的字段变化（新增字段设默认值、重命名字段转换等） | 1.5 | 是 |
-| 实现 `core/context.cj` ContextManager | 环境上下文持久化管理：加载 `context.json` → 版本检查 + 迁移 → 反序列化为 `EnvironmentContext`。保存：序列化 → 写入（通过 `infra/fs.cj`）。更新：合并新的调查结论（LLM 返回的环境上下文更新 delta）。首次使用时的环境自动探测（OS / distro / shell / 包管理器） | 1.5 | — |
+| 实现 `core/context.cj` ContextManager | 环境上下文持久化管理：加载 `context.json` → 版本检查 + 迁移 → 反序列化为 `EnvironmentContext`。保存：序列化 → 写入（通过 `infra/fs.cj`）。更新：合并 LLM 返回的 `factEdits` 到 `HashMap<String, EnvironmentFact>`。首次使用时做轻量本地探测并写入 facts（OS / distro / 包管理器列表 / 常用工具），但 Shell 不持久化，构造 prompt 时动态注入到 facts 之后。 | 1.5 | — |
 
 ### 4.3 会话编排与请求构造
 

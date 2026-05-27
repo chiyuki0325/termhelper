@@ -26,6 +26,17 @@ public class CommandData {
     public var explanation: Explanation = Explanation()
     public var interactive: Bool = false
     public var safety: SafetyInfo = SafetyInfo()
+    public var factEdits: ArrayList<FactEdit> = ArrayList<FactEdit>()
+}
+
+@JsonAdapter
+public class FactEdit {
+    public var op: String = ""
+    public var id: String = ""
+    public var oldText: String = ""
+    public var newText: String = ""
+    public var source: String = ""
+    public var reason: String = ""
 }
 
 @JsonAdapter

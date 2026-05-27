@@ -13,6 +13,7 @@ let O_RDONLY: Int32 = 0
 let O_WRONLY: Int32 = 1
 let O_CREAT: Int32 = 0o100
 let LOCK_EX: Int32 = 2
+let LOCK_NB: Int32 = 4
 let LOCK_UN: Int32 = 8
 
 /// 确保文件所在目录存在
@@ -54,7 +55,7 @@ private func readJsonFileAtomicInternal(dataPath: String, strict: Bool): JsonVal
             }
             return JsonObject()
         }
-        flock(lockFd, LOCK_EX)
+        spinLock(lockFd)
 
         var content = "{}"
         let dataP = Path(dataPath)
@@ -112,7 +113,7 @@ public func readModifyWriteJson(dataPath: String, modifier: (JsonObject) -> Json
         let lockFd = open(cpath, O_CREAT | O_WRONLY, 0o600)
         LibC.free(cpath)
         if (lockFd < 0) { throw Exception("无法创建锁文件: ${lockPath}") }
-        flock(lockFd, LOCK_EX)  // ─── 锁开始 ───
+        spinLock(lockFd)  // ─── 锁开始 ───
 
         // 1. 读取
         var obj = JsonObject()
@@ -132,7 +133,7 @@ public func readModifyWriteJson(dataPath: String, modifier: (JsonObject) -> Json
         obj = modifier(obj)
 
         // 3. 写回
-        let newContent = obj.toString()
+        let newContent = obj.toJsonString()
         let dpath = LibC.mallocCString(dataPath)
         let dataFd = open(dpath, O_CREAT | O_WRONLY, 0o600)
         LibC.free(dpath)
@@ -157,9 +158,9 @@ public func writeJsonFileAtomic(dataPath: String, value: JsonValue): Unit {
         let lockFd = open(cpath, O_CREAT | O_WRONLY, 0o600)
         LibC.free(cpath)
         if (lockFd < 0) { throw Exception("无法创建锁文件: ${lockPath}") }
-        flock(lockFd, LOCK_EX)
+        spinLock(lockFd)
 
-        let content = value.toString()
+        let content = value.toJsonString()
         let dpath = LibC.mallocCString(dataPath)
         let dataFd = open(dpath, O_CREAT | O_WRONLY, 0o600)
         LibC.free(dpath)
@@ -171,6 +172,14 @@ public func writeJsonFileAtomic(dataPath: String, value: JsonValue): Unit {
         fdWriteAll(dataFd, content)
         fsync(dataFd); close(dataFd)
         flock(lockFd, LOCK_UN); close(lockFd)
+    }
+}
+
+func spinLock(lockFd: Int32): Unit {
+    unsafe {
+        while (flock(lockFd, LOCK_EX | LOCK_NB) != 0) {
+            sleep(50 * Duration.millisecond)
+        }
     }
 }
 

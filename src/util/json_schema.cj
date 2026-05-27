@@ -105,9 +105,22 @@ public func parseLLMResponse(root: JsonObject): ?LLMResponse {
 
     // 规范化 safety level（LLM 常返回小写，枚举变体是 PascalCase）
     normalizeJsonForDeser(source)
+    fillMissingDefaultFields(typ, source)
 
     let dm = DataModel.fromJson(source)
     deserializeData(typ, dm)
+}
+
+func fillMissingDefaultFields(typ: String, obj: JsonObject): Unit {
+    if (typ == "command") {
+        if (!obj.containsKey("factEdits")) {
+            obj.put("factEdits", JsonArray())
+        }
+    } else if (typ == "investigate") {
+        if (!obj.containsKey("contextUpdates")) {
+            obj.put("contextUpdates", JsonObject())
+        }
+    }
 }
 
 func deserializeData(typ: String, dm: DataModel): ?LLMResponse {
