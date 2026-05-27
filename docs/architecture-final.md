@@ -221,7 +221,8 @@ ratatui = { path = "references/ratatui/cangjie-ratatui-sdk" }
 
 ### 3.1 LLM 结构化响应 (types/llm.cj)
 
-LLM 响应通过各 Provider 的 **原生 Structured Output** 机制保证 JSON Schema 合规：
+LLM 响应通过各 Provider 的 **原生 Structured Output** 机制保证 JSON Schema 合规。
+类型使用 `naivejson` 库的 `@JsonAdapter` 宏标注，编译器自动生成 `serialize()` / `deserialize()` / `toJsonSchema()`。
 
 | Provider | 机制 |
 |----------|------|
@@ -229,58 +230,64 @@ LLM 响应通过各 Provider 的 **原生 Structured Output** 机制保证 JSON 
 | Anthropic | `tool_use` with a single tool whose `input_schema` is the response schema |
 | Google | `response_mime_type: "application/json"` + `response_schema` |
 
-> 使用 Structured Output 后，LLM 保证输出符合给定 JSON Schema，无需容错提取（v1 的 JSON 提取回退逻辑不再需要）。若 Structured Output 因 Provider 不支持而不可用，该 Provider 实现中降级为 `response_format: { type: "json_object" }` + 基本容错提取。
+当 Provider 不支持 `json_schema` 时（如 DeepSeek），自动降级为 `json_object` + 详细 prompt（含 few-shot examples）。
+此时 JSON Schema 约束不再生效，改为通过 prompt 中的格式描述和示例保证输出结构。
 
 ```cangjie
-// LLM 响应的三种类型
-enum LLMResponse {
+enum LLMResponse {  // 不含 @JsonAdapter — payloaded enum 需手动 dispatch
     | Command(CommandData)
     | Investigate(InvestigateData)
     | Clarify(ClarifyData)
 }
 
-struct CommandData {
-    command: String
-    explanation: Explanation
-    interactive: Bool            // 是否交互式命令
-    safety: SafetyInfo
+@JsonAdapter
+class CommandData {
+    var command: String = ""
+    var explanation: Explanation = Explanation()
+    var interactive: Bool = false
+    var safety: SafetyInfo = SafetyInfo()
 }
 
-struct Explanation {
-    summary: String              // 一句话概述
-    breakdown: Array<BreakdownItem>
+@JsonAdapter
+class Explanation {
+    var summary: String = ""
+    var breakdown: ArrayList<BreakdownItem> = ArrayList<BreakdownItem>()
 }
 
-struct BreakdownItem {
-    component: String            // 命令组件 (如 "rm", "-rf")
-    explanation: String          // 组件说明
+@JsonAdapter
+class BreakdownItem {
+    var component: String = ""
+    var explanation: String = ""
 }
 
-struct SafetyInfo {
-    level: SafetyLevel           // safe / caution / danger / privilege
-    warnings: Array<String>
+@JsonAdapter
+class SafetyInfo {
+    var level: SafetyLevel = SafetyLevel.Safe
+    var warnings: ArrayList<String> = ArrayList<String>()
 }
 
+@JsonAdapter
 enum SafetyLevel {
-    | Safe
-    | Caution
-    | Danger
-    | Privilege
+    | Safe | Caution | Danger | Privilege
 }
 
-struct InvestigateData {
-    reason: String               // 调查理由
-    commands: Array<DiagnosticCommand>
+@JsonAdapter
+class InvestigateData {
+    var reason: String = ""
+    var commands: ArrayList<DiagnosticCommand> = ArrayList<DiagnosticCommand>()
+    var contextUpdates: HashMap<String, String> = HashMap<String, String>()  // FR-03: 调查结论写回 context.json
 }
 
-struct DiagnosticCommand {
-    command: String
-    rationale: String
-    authorized: Bool = false     // 运行时字段，非 LLM 输出
+@JsonAdapter
+class DiagnosticCommand {
+    var command: String = ""
+    var rationale: String = ""
+    @JsonIgnore var authorized: Bool = false   // 运行时字段，非 LLM 输出
 }
 
-struct ClarifyData {
-    question: String
+@JsonAdapter
+class ClarifyData {
+    var question: String = ""
 }
 ```
 
@@ -842,13 +849,20 @@ ContextManager (core/context.cj) → infra/fs.cj
 
 ```
 API Key 读取顺序:
-  1. 环境变量 (LLM_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY)
-  2. ~/.config/termhelper/config.json → api_key 字段
-  3. TUI 首次运行交互式提示输入 (写入 config.json)
+  1. Provider 专属环境变量（ANTHROPIC_API_KEY 仅当 provider=anthropic 时生效，
+     GOOGLE_API_KEY 仅当 provider=google 时生效）
+  2. 通用环境变量 (LLM_API_KEY，其次 OPENAI_API_KEY)
+  3. ~/.config/termhelper/config.json → llm.api_key 字段
+  4. TUI 首次运行交互式提示输入
 
 LLM Provider 选择:
   1. config.json → provider 字段 (openai_compat / anthropic / google)
   2. 默认 openai_compat
+
+structured_output_mode:
+  - "auto"（默认）: 先尝试 json_schema，若 Provider 不支持（HTTP 400）自动降级为
+    json_object + 详细 prompt（含 few-shot examples）
+  - "json_object": 跳过 json_schema 尝试，直接使用 json_object 模式
 ```
 
 ### 8.2 config.json
@@ -863,7 +877,8 @@ LLM Provider 选择:
     "model": "gpt-4o",
     "timeout_sec": 60,
     "connect_timeout_sec": 10,
-    "idle_timeout_sec": 30
+    "idle_timeout_sec": 30,
+    "structured_output_mode": "auto"
   },
   "execution": {
     "spawn_timeout_sec": 300,

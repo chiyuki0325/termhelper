@@ -98,7 +98,7 @@ public class SpawnHandle {
             while (!done) { cond.wait() }
             match (result) {
                 case Some(r) => r
-                case None => CommandResult(-1, "", "no result")
+                case None => makeCommandResult(-1, "", "no result")
             }
         }
     }
@@ -174,7 +174,7 @@ func spawnInternal(command: String, timeoutMs: Int64, handle: ?SpawnHandle): Com
 
         if (pipe(stdoutFds) < 0 || pipe(stderrFds) < 0) {
             LibC.free(stdoutFds); LibC.free(stderrFds)
-            return CommandResult(-1, "", "pipe failed")
+            return makeCommandResult(-1, "", "pipe failed")
         }
 
         let stdoutRead = stdoutFds.read(0); let stdoutWrite = stdoutFds.read(1)
@@ -183,7 +183,7 @@ func spawnInternal(command: String, timeoutMs: Int64, handle: ?SpawnHandle): Com
         let pid = fork()
         if (pid < 0) {
             LibC.free(stdoutFds); LibC.free(stderrFds)
-            return CommandResult(-1, "", "fork failed")
+            return makeCommandResult(-1, "", "fork failed")
         }
 
         if (pid == 0) {
@@ -317,6 +317,14 @@ func spawnInternal(command: String, timeoutMs: Int64, handle: ?SpawnHandle): Com
         LibC.free(readBuf); LibC.free(statusPtr)
         LibC.free(stdoutFds); LibC.free(stderrFds)
 
-        CommandResult(exitCode, stdoutStr, stderrStr)
+        makeCommandResult(exitCode, stdoutStr, stderrStr)
     }
+}
+
+func makeCommandResult(exitCode: Int32, stdout: String, stderr: String): CommandResult {
+    let r = CommandResult()
+    r.exitCode = exitCode
+    r.stdout = stdout
+    r.stderr = stderr
+    r
 }

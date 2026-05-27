@@ -11,8 +11,18 @@ public class RequestBuilder {
 
     public func build(query: String, history: ArrayList<Message>, ctx: EnvironmentContext, config: Config): ChatRequest {
         let req = ChatRequest(config.llm.model)
-        req.systemPrompt = Some(buildMainSystemPrompt(ctx))
         req.maxTokens = Some(4096)
+        req.structuredOutputMode = config.llm.structuredOutputMode
+
+        let useJsonObject = config.llm.structuredOutputMode == "json_object"
+
+        if (useJsonObject) {
+            req.systemPrompt = Some(buildObjectModePrompt(ctx))
+        } else {
+            // auto / json_schema: 主 prompt 精简，fallback prompt 详细
+            req.systemPrompt = Some(buildSchemaModePrompt(ctx))
+            req.fallbackSystemPrompt = Some(buildObjectModePrompt(ctx))
+        }
 
         if (history.size == 0 && query.size > 0) {
             req.addUserMessage(query)
@@ -25,7 +35,7 @@ public class RequestBuilder {
             setAnthropicStructuredOutput(req, "termhelper_response", schema)
         } else if (config.provider == "google") {
             setGoogleResponseFormat(req, "termhelper_response", schema)
-        } else if (config.llm.structuredOutputMode == "json_object") {
+        } else if (useJsonObject) {
             setOpenAIJsonObjectResponseFormat(req)
         } else {
             setOpenAIResponseFormat(req, "termhelper_response", schema)

@@ -19,13 +19,18 @@ public class AnthropicProvider {
     private let baseUrl: String
     private let apiKey: String
     private let model: String
-    private let timeoutSec: Int64
+    private let connectTimeoutSec: Int64
+    private let readTimeoutSec: Int64
+    private let idleTimeoutSec: Int64
 
-    public init(baseUrl: String, apiKey: String, model: String, timeoutSec: Int64) {
+    public init(baseUrl: String, apiKey: String, model: String,
+                connectTimeoutSec: Int64, readTimeoutSec: Int64, idleTimeoutSec: Int64) {
         this.baseUrl = if (baseUrl.endsWith("/")) { baseUrl[0..(baseUrl.size - 1)] } else { baseUrl }
         this.apiKey = apiKey
         this.model = model
-        this.timeoutSec = timeoutSec
+        this.connectTimeoutSec = connectTimeoutSec
+        this.readTimeoutSec = readTimeoutSec
+        this.idleTimeoutSec = idleTimeoutSec
     }
 
     /// 非流式对话
@@ -54,19 +59,7 @@ public class AnthropicProvider {
 
     private func sendPost(url: String, body: String): String {
         debugTrace("Anthropic.sendPost: build client url=${url}, body_size=${body.size}")
-        let client = if (url.startsWith("https://")) {
-            let tlsConfig = TlsClientConfig()
-            ClientBuilder()
-                .tlsConfig(tlsConfig)
-                .readTimeout(Duration.second * timeoutSec)
-                .writeTimeout(Duration.second * timeoutSec)
-                .build()
-        } else {
-            ClientBuilder()
-                .readTimeout(Duration.second * timeoutSec)
-                .writeTimeout(Duration.second * timeoutSec)
-                .build()
-        }
+        let client = buildClient(readTimeoutSec)
         let req = HttpRequestBuilder()
             .post()
             .url(url)
@@ -95,19 +88,8 @@ public class AnthropicProvider {
 
     private func streamPost(url: String, body: String, onEvent: (StreamEvent) -> Unit): ChatResponse {
         debugTrace("Anthropic.streamPost: build client url=${url}, body_size=${body.size}")
-        let client = if (url.startsWith("https://")) {
-            let tlsConfig = TlsClientConfig()
-            ClientBuilder()
-                .tlsConfig(tlsConfig)
-                .readTimeout(Duration.second * (timeoutSec * 3))
-                .writeTimeout(Duration.second * timeoutSec)
-                .build()
-        } else {
-            ClientBuilder()
-                .readTimeout(Duration.second * (timeoutSec * 3))
-                .writeTimeout(Duration.second * timeoutSec)
-                .build()
-        }
+        let streamTimeout = if (idleTimeoutSec > readTimeoutSec) { idleTimeoutSec } else { readTimeoutSec * 3 }
+        let client = buildClient(streamTimeout)
         let req = HttpRequestBuilder()
             .post()
             .url(url)
@@ -456,9 +438,20 @@ public class AnthropicProvider {
             case _ => "user"
         }
     }
+
+    private func buildClient(timeout: Int64): Client {
+        let base = ClientBuilder()
+            .readTimeout(Duration.second * timeout)
+            .writeTimeout(Duration.second * connectTimeoutSec)
+        if (baseUrl.startsWith("https://")) {
+            base.tlsConfig(TlsClientConfig()).build()
+        } else {
+            base.build()
+        }
+    }
 }
 
 /// Create a default Anthropic provider instance
 public func createAnthropicProvider(apiKey: String, model: String): AnthropicProvider {
-    AnthropicProvider("https://api.anthropic.com/v1", apiKey, model, 60)
+    AnthropicProvider("https://api.anthropic.com/v1", apiKey, model, 10, 60, 30)
 }

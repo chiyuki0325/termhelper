@@ -78,7 +78,11 @@ public class ChatRequest {
     public var tools: ?ArrayList<ToolDefinition>
     public var toolChoice: ?ToolChoice
     public var responseFormat: ?ResponseFormat
-    public var systemPrompt: ?String  // 可选的 system 消息（Provider 负责插入）
+    public var systemPrompt: ?String
+    /// "auto" (try json_schema first) | "json_object" (skip json_schema) | "json_schema" (native only)
+    public var structuredOutputMode: String
+    /// system prompt to use when falling back from json_schema to json_object
+    public var fallbackSystemPrompt: ?String
 
     public init(model: String) {
         this.messages = ArrayList<Message>()
@@ -89,18 +93,29 @@ public class ChatRequest {
         this.toolChoice = None
         this.responseFormat = None
         this.systemPrompt = None
+        this.structuredOutputMode = "auto"
+        this.fallbackSystemPrompt = None
     }
 
     public func addUserMessage(content: String): Unit {
-        messages.add(Message(MessageRole.User, content))
+        let m = Message()
+        m.role = MessageRole.User
+        m.content = content
+        messages.add(m)
     }
 
     public func addAssistantMessage(content: String): Unit {
-        messages.add(Message(MessageRole.Assistant, content))
+        let m = Message()
+        m.role = MessageRole.Assistant
+        m.content = content
+        messages.add(m)
     }
 
     public func addToolMessage(content: String): Unit {
-        messages.add(Message(MessageRole.Tool, content))
+        let m = Message()
+        m.role = MessageRole.Tool
+        m.content = content
+        messages.add(m)
     }
 }
 

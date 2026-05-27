@@ -19,28 +19,29 @@ func applyCommandSafetyFallback(data: CommandData): CommandData {
     }
     if (!shouldScan) { return data }
 
-    let command = data.command
     let warnings = ArrayList<String>()
     for (i in 0..data.safety.warnings.size) { warnings.add(data.safety.warnings[i]) }
 
-    if (containsDanger(command)) {
+    if (containsDanger(data.command)) {
         warnings.add("本地安全兜底检测到潜在破坏性命令，请逐项确认路径、通配符和递归参数。")
-        return CommandData(
-            data.command,
-            data.explanation,
-            data.interactive,
-            SafetyInfo(SafetyLevel.Danger, warnings)
-        )
+        var newData = CommandData()
+        newData.command = data.command
+        newData.explanation = data.explanation
+        newData.interactive = data.interactive
+        newData.safety.level = SafetyLevel.Danger
+        newData.safety.warnings = warnings
+        return newData
     }
 
-    if (containsPrivilege(command)) {
+    if (containsPrivilege(data.command)) {
         warnings.add("本地安全兜底检测到提权或系统级操作。")
-        return CommandData(
-            data.command,
-            data.explanation,
-            data.interactive,
-            SafetyInfo(SafetyLevel.Privilege, warnings)
-        )
+        var newData = CommandData()
+        newData.command = data.command
+        newData.explanation = data.explanation
+        newData.interactive = data.interactive
+        newData.safety.level = SafetyLevel.Privilege
+        newData.safety.warnings = warnings
+        return newData
     }
 
     data

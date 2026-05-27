@@ -135,13 +135,16 @@ func runDebug(query: String): Int64 {
 func createProvider(config: Config): LLMProvider {
     let providerName = config.provider
     let baseUrl = providerBaseUrl(providerName, config.llm.baseUrl)
-    debugTrace("createProvider: provider=${providerName}, base_url=${baseUrl}")
+    let connectSec = config.llm.connectTimeoutSec
+    let readSec = config.llm.timeoutSec
+    let idleSec = config.llm.idleTimeoutSec
+    debugTrace("createProvider: provider=${providerName}, base_url=${baseUrl}, connect=${connectSec}, read=${readSec}, idle=${idleSec}")
     if (providerName == "anthropic") {
-        LLMProvider.fromAnthropic(AnthropicProvider(baseUrl, config.llm.apiKey, config.llm.model, config.llm.timeoutSec))
+        LLMProvider.fromAnthropic(AnthropicProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
     } else if (providerName == "google") {
-        LLMProvider.fromGoogle(GoogleProvider(baseUrl, config.llm.apiKey, config.llm.model, config.llm.timeoutSec))
+        LLMProvider.fromGoogle(GoogleProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
     } else {
-        LLMProvider.fromOpenAI(OpenAICompatProvider(baseUrl, config.llm.apiKey, config.llm.model, config.llm.timeoutSec))
+        LLMProvider.fromOpenAI(OpenAICompatProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
     }
 }
 

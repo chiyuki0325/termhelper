@@ -9,6 +9,7 @@
 
 [dependencies]
   ratatui = { path = "references/ratatui/cangjie-ratatui-sdk" }
+  naivejson = { path = "thirdparty/naivejson/naivejson" }
 
 [target.aarch64-unknown-linux-gnu]
   [target.aarch64-unknown-linux-gnu.bin-dependencies]

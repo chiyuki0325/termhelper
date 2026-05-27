@@ -1,3 +1,4 @@
-# library references
+# vendored dependencies
 references/
+thirdparty/
 target/

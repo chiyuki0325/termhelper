@@ -1,12 +1,19 @@
 package termhelper.types
 
+import naivejson.macros.*
+import naivejson.schema.*
+import naivejson.schema.model.*
+import naivejson.schema.render.*
 import std.collection.HashMap
+import stdx.serialization.serialization.DataModel
+import stdx.serialization.serialization.DataModelStruct
+import stdx.serialization.serialization.DataModelString
+import stdx.serialization.serialization.DataModelNull
+import stdx.serialization.serialization.DataModelException
+import stdx.serialization.serialization.Serializable
+import stdx.serialization.serialization.field
 
-// ═══════════════════════════════════════════════════════════════
-// 会话模型
-// ═══════════════════════════════════════════════════════════════
-
-/// 消息角色
+@JsonAdapter
 public enum MessageRole {
     | System
     | User
@@ -14,59 +21,30 @@ public enum MessageRole {
     | Tool
 }
 
-/// 对话消息
-public struct Message {
-    public let role: MessageRole
-    public let content: String
-
-    public init(role: MessageRole, content: String) {
-        this.role = role
-        this.content = content
-    }
+@JsonAdapter
+public class Message {
+    public var role: MessageRole = MessageRole.User
+    public var content: String = ""
 }
 
 /// 环境上下文（跨会话持久化）
-public struct EnvironmentContext {
-    public let version: Int64
-    public let os: ?String
-    public let distro: ?String
-    public let packageManager: ?String
-    public let shell: String
-    public let tools: HashMap<String, String>
-    public let extras: HashMap<String, String>
-    public let lastUpdated: Int64
+@JsonAdapter
+public class EnvironmentContext {
+    public var version: Int64 = 2
+    @JsonIgnoreNull
+    public var os: Option<String> = None
+    @JsonIgnoreNull
+    public var distro: Option<String> = None
+    @JsonIgnoreNull
+    public var packageManager: Option<String> = None
+    public var shell: String = ""
+    public var tools: HashMap<String, String> = HashMap<String, String>()
+    public var extras: HashMap<String, String> = HashMap<String, String>()
+    public var lastUpdated: Int64 = 0
 
-    public init(
-        version: Int64,
-        os: ?String,
-        distro: ?String,
-        packageManager: ?String,
-        shell: String,
-        tools: HashMap<String, String>,
-        extras: HashMap<String, String>,
-        lastUpdated: Int64
-    ) {
-        this.version = version
-        this.os = os
-        this.distro = distro
-        this.packageManager = packageManager
-        this.shell = shell
-        this.tools = tools
-        this.extras = extras
-        this.lastUpdated = lastUpdated
-    }
-
-    /// 创建空的环境上下文（首次使用）
     public static func empty(shell: String): EnvironmentContext {
-        EnvironmentContext(
-            2,
-            None,
-            None,
-            None,
-            shell,
-            HashMap<String, String>(),
-            HashMap<String, String>(),
-            0
-        )
+        let ctx = EnvironmentContext()
+        ctx.shell = shell
+        ctx
     }
 }

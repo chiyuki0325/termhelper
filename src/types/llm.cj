@@ -1,67 +1,52 @@
 package termhelper.types
 
+import naivejson.macros.*
+import naivejson.schema.*
+import naivejson.schema.model.*
+import naivejson.schema.render.*
 import std.collection.ArrayList
+import std.collection.HashMap
+import stdx.serialization.serialization.DataModel
+import stdx.serialization.serialization.DataModelStruct
+import stdx.serialization.serialization.DataModelString
+import stdx.serialization.serialization.DataModelException
+import stdx.serialization.serialization.Serializable
+import stdx.serialization.serialization.field
 
-// ═══════════════════════════════════════════════════════════════
-// LLM 结构化响应类型
-// ═══════════════════════════════════════════════════════════════
-
-/// LLM 响应的三种类型
+/// LLM 响应（手动 dispatch，非 @JsonAdapter）
 public enum LLMResponse {
     | Command(CommandData)
     | Investigate(InvestigateData)
     | Clarify(ClarifyData)
 }
 
-/// 命令数据
-public struct CommandData {
-    public let command: String
-    public let explanation: Explanation
-    public let interactive: Bool
-    public let safety: SafetyInfo
-
-    public init(command: String, explanation: Explanation, interactive: Bool, safety: SafetyInfo) {
-        this.command = command
-        this.explanation = explanation
-        this.interactive = interactive
-        this.safety = safety
-    }
+@JsonAdapter
+public class CommandData {
+    public var command: String = ""
+    public var explanation: Explanation = Explanation()
+    public var interactive: Bool = false
+    public var safety: SafetyInfo = SafetyInfo()
 }
 
-/// 命令分解说明
-public struct Explanation {
-    public let summary: String
-    public let breakdown: ArrayList<BreakdownItem>
-
-    public init(summary: String, breakdown: ArrayList<BreakdownItem>) {
-        this.summary = summary
-        this.breakdown = breakdown
-    }
+@JsonAdapter
+public class Explanation {
+    public var summary: String = ""
+    public var breakdown: ArrayList<BreakdownItem> = ArrayList<BreakdownItem>()
 }
 
-/// 命令组件说明项
-public struct BreakdownItem {
-    public let component: String
-    public let explanation: String
-
-    public init(component: String, explanation: String) {
-        this.component = component
-        this.explanation = explanation
-    }
+@JsonAdapter
+public class BreakdownItem {
+    public var component: String = ""
+    public var explanation: String = ""
 }
 
-/// 安全信息
-public struct SafetyInfo {
-    public let level: SafetyLevel
-    public let warnings: ArrayList<String>
-
-    public init(level: SafetyLevel, warnings: ArrayList<String>) {
-        this.level = level
-        this.warnings = warnings
-    }
+@JsonAdapter
+public class SafetyInfo {
+    public var level: SafetyLevel = SafetyLevel.Safe
+    public var warnings: ArrayList<String> = ArrayList<String>()
 }
 
-/// 安全等级
+@JsonAdapter
 public enum SafetyLevel {
     | Safe
     | Caution
@@ -69,35 +54,23 @@ public enum SafetyLevel {
     | Privilege
 }
 
-/// 环境调查数据
-public struct InvestigateData {
-    public let reason: String
-    public let commands: ArrayList<DiagnosticCommand>
-
-    public init(reason: String, commands: ArrayList<DiagnosticCommand>) {
-        this.reason = reason
-        this.commands = commands
-    }
+/// FR-03: 环境调查 — contextUpdates 由 ContextManager.update() 合并到 context.json
+@JsonAdapter
+public class InvestigateData {
+    public var reason: String = ""
+    public var commands: ArrayList<DiagnosticCommand> = ArrayList<DiagnosticCommand>()
+    public var contextUpdates: HashMap<String, String> = HashMap<String, String>()
 }
 
-/// 诊断命令
-public struct DiagnosticCommand {
-    public let command: String
-    public let rationale: String
-    public var authorized: Bool
-
-    public init(command: String, rationale: String) {
-        this.command = command
-        this.rationale = rationale
-        this.authorized = false
-    }
+@JsonAdapter
+public class DiagnosticCommand {
+    public var command: String = ""
+    public var rationale: String = ""
+    @JsonIgnore
+    public var authorized: Bool = false
 }
 
-/// 澄清提问数据
-public struct ClarifyData {
-    public let question: String
-
-    public init(question: String) {
-        this.question = question
-    }
+@JsonAdapter
+public class ClarifyData {
+    public var question: String = ""
 }

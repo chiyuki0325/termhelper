@@ -4,6 +4,7 @@ import termhelper.types.*
 import termhelper.infra.*
 import std.collection.*
 import stdx.encoding.json.*
+import stdx.serialization.serialization.*
 
 foreign func time(tloc: CPointer<Int64>): Int64
 
@@ -13,10 +14,8 @@ public class ContextManager {
     public func load(): EnvironmentContext {
         let contextPath = termhelperContextPath()
         if (fileExists(contextPath)) {
-            let raw = loadContextJson()
-            match (migrateContextJson(raw)) {
-                case Some(obj) =>
-                    let ctx = contextFromJson(obj)
+            match (loadAndMigrate()) {
+                case Some(ctx) =>
                     if (ctx.version < CURRENT_CONTEXT_VERSION) {
                         let fresh = detectEnvironment()
                         save(fresh)
@@ -26,6 +25,7 @@ public class ContextManager {
                         ctx
                     }
                 case None =>
+                    // 文件损坏或版本不兼容 — 丢弃并重新探测
                     let fresh = detectEnvironment()
                     save(fresh)
                     fresh
@@ -40,36 +40,49 @@ public class ContextManager {
     public func save(ctx: EnvironmentContext): Unit {
         let contextPath = termhelperContextPath()
         try {
-            writeFileString(contextPath, contextToJson(ctx).toString())
+            let dm = ctx.serialize()
+            let jsonStr = dm.toJson().toJsonString()
+            writeFileString(contextPath, jsonStr)
         } catch (e: Exception) {
             debugTrace("ContextManager.save: skip persist path=${contextPath}, err=${e.message}")
         }
     }
 
-    /// Merge JSON object fields into extras/tools for investigation results.
-    public func update(ctx: EnvironmentContext, delta: JsonObject): EnvironmentContext {
+    /// 合并调查结论到环境上下文。
+    /// delta 来自 InvestigateData.contextUpdates。
+    public func update(ctx: EnvironmentContext, delta: HashMap<String, String>): EnvironmentContext {
         let tools = cloneMap(ctx.tools)
         let extras = cloneMap(ctx.extras)
 
-        match (delta.get("tools")) {
-            case Some(toolsJv) => mergeStringObject(tools, toolsJv.asObject())
-            case None => ()
-        }
-        match (delta.get("extras")) {
-            case Some(extrasJv) => mergeStringObject(extras, extrasJv.asObject())
-            case None => mergeStringObject(extras, delta)
+        for ((k, v) in delta) {
+            extras[k] = v
         }
 
-        EnvironmentContext(
-            CURRENT_CONTEXT_VERSION,
-            ctx.os,
-            ctx.distro,
-            ctx.packageManager,
-            ctx.shell,
-            tools,
-            extras,
-            currentTimeSeconds()
-        )
+        let newCtx = EnvironmentContext()
+        newCtx.version = CURRENT_CONTEXT_VERSION
+        newCtx.os = ctx.os
+        newCtx.distro = ctx.distro
+        newCtx.packageManager = ctx.packageManager
+        newCtx.shell = ctx.shell
+        newCtx.tools = tools
+        newCtx.extras = extras
+        newCtx.lastUpdated = currentTimeSeconds()
+        newCtx
+    }
+}
+
+/// 读取 context.json → 迁移 → 返回 EnvironmentContext。
+/// 文件缺失/JSON 损坏/版本过高 → None
+func loadAndMigrate(): ?EnvironmentContext {
+    let raw = readFileString(termhelperContextPath())
+    let jv = try { JsonValue.fromStr(raw) } catch (_: Exception) { return None }
+    match (migrateContextJson(jv)) {
+        case Some(obj) =>
+            try {
+                let dm = DataModel.fromJson(obj)
+                Some(EnvironmentContext.deserialize(dm))
+            } catch (_: Exception) { None }
+        case None => None
     }
 }
 
@@ -87,42 +100,16 @@ public func detectEnvironment(): EnvironmentContext {
         if (path.size > 0) { tools.add(tool, path) }
     }
 
-    EnvironmentContext(
-        CURRENT_CONTEXT_VERSION,
-        os,
-        distro,
-        packageManager,
-        shell,
-        tools,
-        extras,
-        currentTimeSeconds()
-    )
-}
-
-public func contextToJson(ctx: EnvironmentContext): JsonObject {
-    let obj = JsonObject()
-    obj.put("version", JsonInt(ctx.version))
-    obj.put("os", JsonString(optionString(ctx.os)))
-    obj.put("distro", JsonString(optionString(ctx.distro)))
-    obj.put("packageManager", JsonString(optionString(ctx.packageManager)))
-    obj.put("shell", JsonString(ctx.shell))
-    obj.put("tools", stringMapToJson(ctx.tools))
-    obj.put("extras", stringMapToJson(ctx.extras))
-    obj.put("lastUpdated", JsonInt(ctx.lastUpdated))
-    obj
-}
-
-public func contextFromJson(obj: JsonObject): EnvironmentContext {
-    EnvironmentContext(
-        jsonGetInt(obj, "version", 1),
-        nonEmptyOption(jsonGetString(obj, "os", "")),
-        nonEmptyOption(jsonGetString(obj, "distro", "")),
-        nonEmptyOption(jsonGetString(obj, "packageManager", "")),
-        jsonGetString(obj, "shell", envGetShell()),
-        jsonObjectToStringMap(getObject(obj, "tools")),
-        jsonObjectToStringMap(getObject(obj, "extras")),
-        jsonGetInt(obj, "lastUpdated", 0)
-    )
+    let ctx = EnvironmentContext()
+    ctx.version = CURRENT_CONTEXT_VERSION
+    ctx.os = os
+    ctx.distro = distro
+    ctx.packageManager = packageManager
+    ctx.shell = shell
+    ctx.tools = tools
+    ctx.extras = extras
+    ctx.lastUpdated = currentTimeSeconds()
+    ctx
 }
 
 func detectDistro(): ?String {
@@ -139,15 +126,6 @@ func detectPackageManager(): ?String {
     None
 }
 
-func loadContextJson(): JsonValue {
-    let raw = readFileString(termhelperContextPath())
-    try {
-        JsonValue.fromStr(raw)
-    } catch (_: Exception) {
-        JsonObject()
-    }
-}
-
 func runAndTrim(command: String): String {
     let (code, stdout) = spawnSimple(command)
     if (code == 0) { stdout.trimAscii() } else { "" }
@@ -162,68 +140,8 @@ func nonEmptyOption(s: String): ?String {
     if (trimmed.size > 0) { Some(trimmed) } else { None }
 }
 
-func optionString(v: ?String): String {
-    match (v) {
-        case Some(s) => s
-        case None => ""
-    }
-}
-
-func stringMapToJson(map: HashMap<String, String>): JsonObject {
-    let obj = JsonObject()
-    for ((k, v) in map) { obj.put(k, JsonString(v)) }
-    obj
-}
-
-func jsonObjectToStringMap(obj: JsonObject): HashMap<String, String> {
-    let map = HashMap<String, String>()
-    for ((k, v) in obj.getFields()) {
-        match (v.kind()) {
-            case JsString => map.add(k, v.asString().getValue())
-            case _ => map.add(k, v.toJsonString())
-        }
-    }
-    map
-}
-
 func cloneMap(src: HashMap<String, String>): HashMap<String, String> {
     let dst = HashMap<String, String>()
     for ((k, v) in src) { dst.add(k, v) }
     dst
-}
-
-func mergeStringObject(dst: HashMap<String, String>, obj: JsonObject): Unit {
-    for ((k, v) in obj.getFields()) {
-        match (v.kind()) {
-            case JsString => dst.add(k, v.asString().getValue())
-            case _ => dst.add(k, v.toJsonString())
-        }
-    }
-}
-
-func getObject(obj: JsonObject, key: String): JsonObject {
-    match (obj.get(key)) {
-        case Some(jv) => try { jv.asObject() } catch (_: Exception) { JsonObject() }
-        case None => JsonObject()
-    }
-}
-
-func jsonGetString(obj: JsonObject, key: String, default: String): String {
-    match (obj.get(key)) {
-        case Some(jv) => match (jv.kind()) {
-            case JsString => jv.asString().getValue()
-            case _ => default
-        }
-        case None => default
-    }
-}
-
-func jsonGetInt(obj: JsonObject, key: String, default: Int64): Int64 {
-    match (obj.get(key)) {
-        case Some(jv) => match (jv.kind()) {
-            case JsInt => jv.asInt().getValue()
-            case _ => default
-        }
-        case None => default
-    }
 }
