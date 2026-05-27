@@ -63,6 +63,10 @@ class TuiAppState {
     var widgetHandle: ?Int64
     var lastRenderedContent: String
     var lastSpinnerFrame: Int64
+    var lastRenderedScrollOffset: Int64
+    var scrollOffset: Int64
+    var maxScrollOffset: Int64
+    var viewportHeight: Int64
 
     init(query: String) {
         this.queue = AppEventQueue()
@@ -89,6 +93,10 @@ class TuiAppState {
         this.widgetHandle = None
         this.lastRenderedContent = ""
         this.lastSpinnerFrame = -1
+        this.lastRenderedScrollOffset = -1
+        this.scrollOffset = 0
+        this.maxScrollOffset = 0
+        this.viewportHeight = 20
     }
 }
 
@@ -209,17 +217,17 @@ func handleAppEvent(state: TuiAppState, session: Session, event: AppEvent): Unit
             case SessionAction.ShowCommand(data) =>
                 state.currentCommand = Some(data)
                 state.selected = 0
-                state.screen = "result"
+                switchScreen(state, "result")
             case SessionAction.RequestInvestigate(data) =>
                 state.investigate = Some(data)
                 state.promptMode = "investigate"
                 state.selected = 0
-                state.screen = "prompt"
+                switchScreen(state, "prompt")
             case SessionAction.AskClarify(data) =>
                 state.clarify = Some(data)
                 state.promptMode = "clarify"
                 state.input = ""
-                state.screen = "prompt"
+                switchScreen(state, "prompt")
             case SessionAction.FormatError(message) => showError(state, message, false)
             case SessionAction.ProviderError(message) => showError(state, message, true)
         }
@@ -229,6 +237,10 @@ func handleAppEvent(state: TuiAppState, session: Session, event: AppEvent): Unit
 }
 
 func handleAction(state: TuiAppState, session: Session, config: Config, action: Action): Unit {
+    if (handleScrollAction(state, action)) {
+        return
+    }
+
     match (state.screen) {
         case "loading" => handleLoadingAction(state, action)
         case "result" => handleResultAction(state, config, action)
@@ -237,6 +249,58 @@ func handleAction(state: TuiAppState, session: Session, config: Config, action: 
         case "error" => handleErrorAction(state, session, action)
         case _ => ()
     }
+}
+
+func handleScrollAction(state: TuiAppState, action: Action): Bool {
+    match (action) {
+        case Action.ScrollUp =>
+            scrollBy(state, -1)
+            true
+        case Action.ScrollDown =>
+            scrollBy(state, 1)
+            true
+        case Action.PageUp =>
+            scrollBy(state, -pageScrollAmount(state))
+            true
+        case Action.PageDown =>
+            scrollBy(state, pageScrollAmount(state))
+            true
+        case Action.ScrollTop =>
+            state.scrollOffset = 0
+            true
+        case Action.ScrollBottom =>
+            state.scrollOffset = state.maxScrollOffset
+            true
+        case _ => false
+    }
+}
+
+func scrollBy(state: TuiAppState, delta: Int64): Unit {
+    let next = state.scrollOffset + delta
+    if (next < 0) {
+        state.scrollOffset = 0
+    } else if (next > state.maxScrollOffset) {
+        state.scrollOffset = state.maxScrollOffset
+    } else {
+        state.scrollOffset = next
+    }
+}
+
+func pageScrollAmount(state: TuiAppState): Int64 {
+    if (state.viewportHeight > 4) {
+        state.viewportHeight - 4
+    } else {
+        1
+    }
+}
+
+func switchScreen(state: TuiAppState, screen: String): Unit {
+    if (state.screen != screen) {
+        state.scrollOffset = 0
+        state.maxScrollOffset = 0
+        state.lastRenderedScrollOffset = -1
+    }
+    state.screen = screen
 }
 
 func handleLoadingAction(state: TuiAppState, action: Action): Unit {
@@ -306,7 +370,7 @@ func handleExecuteAction(state: TuiAppState, action: Action): Unit {
                     case Some(handle) => handle.interrupt()
                     case None => ()
                 }
-                state.screen = "result"
+                switchScreen(state, "result")
             }
         case _ => ()
     }
@@ -342,7 +406,7 @@ func handleInvestigateAction(state: TuiAppState, session: Session, config: Confi
             cmd.authorized = true
         }
         case Action.Confirm =>
-            state.screen = "loading"
+            switchScreen(state, "loading")
             state.loadingText = uiText("running_diagnostics") + "\n"
             state.retryText = ""
             runInvestigationTask(state.queue, session, data, config.execution.spawnTimeoutSec)
@@ -366,13 +430,13 @@ func handleTextPromptAction(state: TuiAppState, session: Session, action: Action
             if (state.input.trimAscii().size > 0) {
                 let submitted = state.input
                 state.lastRequest = submitted
-                state.screen = "loading"
+                switchScreen(state, "loading")
                 state.loadingText = ""
                 state.retryText = ""
                 state.input = ""
                 startLlmTask(state.queue, session, submitted, true)
             }
-        case Action.Back | Action.Interrupt => state.screen = "result"
+        case Action.Back | Action.Interrupt => switchScreen(state, "result")
         case _ => ()
     }
 }
@@ -381,7 +445,7 @@ func handleErrorAction(state: TuiAppState, session: Session, action: Action): Un
     match (action) {
         case Action.Confirm | Action.Run =>
             if (state.retryable) {
-                state.screen = "loading"
+                switchScreen(state, "loading")
                 state.loadingText = ""
                 state.retryText = ""
                 startLlmTask(state.queue, session, state.lastRequest, true)
@@ -397,7 +461,7 @@ func startExecute(state: TuiAppState, command: String, config: Config): Unit {
     state.executeDone = false
     state.executeResult = None
     state.activeSpawn = Some(spawnAsync(command, config.execution.spawnTimeoutSec * 1000))
-    state.screen = "execute"
+    switchScreen(state, "execute")
 }
 
 func pollExecute(state: TuiAppState): Unit {
@@ -470,25 +534,75 @@ func openModify(state: TuiAppState, command: String): Unit {
     state.promptMode = "modify"
     state.input = ""
     state.loadingText = ""
-    state.screen = "prompt"
+    switchScreen(state, "prompt")
     state.errorMessage = uiModifyPrompt(command)
 }
 
 func showError(state: TuiAppState, message: String, retryable: Bool): Unit {
     state.errorMessage = message
     state.retryable = retryable
-    state.screen = "error"
+    switchScreen(state, "error")
+}
+
+func updateScrollBounds(terminal: Int64, state: TuiAppState, content: String): Unit {
+    let terminalHeight = Int64(getTerminalHeight(terminal))
+    state.viewportHeight = if (terminalHeight > 2) {
+        terminalHeight - 1
+    } else {
+        20
+    }
+
+    let lineCount = countLines(content)
+    state.maxScrollOffset = if (lineCount > state.viewportHeight) {
+        lineCount - state.viewportHeight
+    } else {
+        0
+    }
+
+    if (state.scrollOffset > state.maxScrollOffset) {
+        state.scrollOffset = state.maxScrollOffset
+    }
+    if (state.scrollOffset < 0) {
+        state.scrollOffset = 0
+    }
+}
+
+func countLines(content: String): Int64 {
+    if (content.size == 0) {
+        return 0
+    }
+
+    var count: Int64 = 1
+    for (b in content) {
+        if (b == b'\n') {
+            count += 1
+        }
+    }
+    count
+}
+
+func scrollOffsetToUInt16(offset: Int64): UInt16 {
+    if (offset <= 0) {
+        0
+    } else if (offset > 65535) {
+        65535
+    } else {
+        UInt16(offset)
+    }
 }
 
 func render(terminal: Int64, state: TuiAppState): Unit {
     let spinnerFrame = state.tick / 4
     let content = buildScreenText(state, spinnerFrame)
-    if (content == state.lastRenderedContent && spinnerFrame == state.lastSpinnerFrame) {
+    updateScrollBounds(terminal, state, content)
+    if (content == state.lastRenderedContent && spinnerFrame == state.lastSpinnerFrame && state.scrollOffset == state
+        .lastRenderedScrollOffset) {
         return
     }
 
     state.lastRenderedContent = content
     state.lastSpinnerFrame = spinnerFrame
+    state.lastRenderedScrollOffset = state.scrollOffset
 
     // The terminal owns widget handles after addWidgetToTerminal() in this SDK.
     // Do not manually free handles that have been attached to the terminal.
@@ -507,6 +621,7 @@ func render(terminal: Int64, state: TuiAppState): Unit {
                 state.widgetHandle = Some(handle)
                 let _ = setWidgetPosition(handle, 2, 1)
                 let _ = setWidgetSize(handle, 0, 0)
+                let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
                 let _ = addWidgetToTerminal(terminal, handle)
             case Err(_) => ()
         }
@@ -521,6 +636,7 @@ func renderStyledContent(terminal: Int64, state: TuiAppState, spinnerFrame: Int6
             buildStyledScreen(handle, state, spinnerFrame)
             let _ = setWidgetPosition(handle, 2, 1)
             let _ = setWidgetSize(handle, 0, 0)
+            let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
             let _ = addWidgetToTerminal(terminal, handle)
             true
         case Err(_) => false
