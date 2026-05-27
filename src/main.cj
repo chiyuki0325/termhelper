@@ -1,6 +1,5 @@
 package termhelper
 
-import termhelper.types.*
 import termhelper.tui.*
 import termhelper.infra.*
 import termhelper.adapters.*
@@ -47,27 +46,8 @@ main(args: Array<String>): Int64 {
         }
     }
 
-    // 其他所有参数拼接为自然语言查询
-    let query = joinArgs(args)
-    println("查询: ${query}")
-    println("[阶段 1] 类型系统初始化完成，TUI 验证待进行")
-
-    // 尝试初始化 TUI（验证 ratatui binding）
-    match (initTUI()) {
-        case Ok(terminal) =>
-            println("[阶段 1] TUI 初始化成功，进入主循环（按 Esc 退出）")
-            match (runMainLoop(terminal)) {
-                case Ok(_) => ()
-                case Err(e) => println("TUI 循环错误: ${e.message}")
-            }
-            cleanupTUI(terminal)
-        case Err(e) =>
-            println("[阶段 1] TUI 初始化失败: ${e.message}")
-            println("[阶段 1] 回退到 CLI 模式")
-            return 1
-    }
-
-    return 0
+    // 其他所有参数拼接为自然语言查询，进入阶段 5 TUI 主流程。
+    return runQueryTui(joinArgs(args))
 }
 
 /// 打印帮助信息
@@ -130,6 +110,31 @@ func runDebug(query: String): Int64 {
     println(llmResponseToJsonString(response))
     debugTrace("runDebug: done")
     return 0
+}
+
+func runQueryTui(query: String): Int64 {
+    let config = try {
+        loadConfig()
+    } catch (e: Exception) {
+        println("配置加载失败: ${e.message}")
+        return 1
+    }
+    if (needsInteractiveConfig(config)) {
+        println("缺少 LLM API Key。请设置 LLM_API_KEY / OPENAI_API_KEY，或写入 ~/.config/termhelper/config.json。")
+        return 1
+    }
+
+    let ctxManager = ContextManager()
+    let ctx = ctxManager.load()
+    let provider = createProvider(config)
+    let session = Session(provider, config, ctx)
+
+    match (runApp(query, session, config)) {
+        case Ok(_) => 0
+        case Err(e) =>
+            println("TUI 启动失败: ${e.message}")
+            1
+    }
 }
 
 func createProvider(config: Config): LLMProvider {
