@@ -30,14 +30,30 @@ func ensureParentDir(filePath: String): Unit {
     }
 }
 
-/// 带锁读取 JSON 文件
+/// 带锁读取 JSON 文件。解析失败时返回空对象。
 public func readJsonFileAtomic(dataPath: String): JsonValue {
+    readJsonFileAtomicInternal(dataPath, false)
+}
+
+/// 带锁严格读取 JSON 文件。读取/解析失败时抛出异常。
+public func readJsonFileAtomicStrict(dataPath: String): JsonValue {
+    readJsonFileAtomicInternal(dataPath, true)
+}
+
+private func readJsonFileAtomicInternal(dataPath: String, strict: Bool): JsonValue {
     let lockPath = "${dataPath}.lock"
     unsafe {
+        debugTrace("readJsonFileAtomic: start path=${dataPath}")
         let cpath = LibC.mallocCString(lockPath)
         let lockFd = open(cpath, O_CREAT | O_WRONLY, 0o600)
         LibC.free(cpath)
-        if (lockFd < 0) { return JsonObject() }
+        if (lockFd < 0) {
+            debugTrace("readJsonFileAtomic: lock open failed path=${lockPath}")
+            if (strict) {
+                throw Exception("无法打开配置锁文件: ${lockPath}")
+            }
+            return JsonObject()
+        }
         flock(lockFd, LOCK_EX)
 
         var content = "{}"
@@ -48,11 +64,38 @@ public func readJsonFileAtomic(dataPath: String): JsonValue {
             LibC.free(dpath)
             if (dataFd >= 0) {
                 content = fdReadAll(dataFd)
+                debugTrace("readJsonFileAtomic: data read path=${dataPath}, size=${content.size}, content=${content}")
                 close(dataFd)
+            } else {
+                debugTrace("readJsonFileAtomic: data open failed path=${dataPath}")
+                flock(lockFd, LOCK_UN)
+                close(lockFd)
+                if (strict) {
+                    throw Exception("无法打开 JSON 文件: ${dataPath}")
+                }
+                return JsonObject()
             }
+        } else {
+            debugTrace("readJsonFileAtomic: data missing path=${dataPath}")
+            flock(lockFd, LOCK_UN)
+            close(lockFd)
+            if (strict) {
+                throw Exception("JSON 文件不存在: ${dataPath}")
+            }
+            return JsonObject()
         }
 
-        let value = try { JsonValue.fromStr(content) } catch (_: Exception) { JsonObject() }
+        let value = try {
+            JsonValue.fromStr(content)
+        } catch (e: Exception) {
+            flock(lockFd, LOCK_UN)
+            close(lockFd)
+            if (strict) {
+                throw Exception("JSON 解析失败: ${dataPath}: ${e.message}")
+            }
+            return JsonObject()
+        }
+        debugTrace("readJsonFileAtomic: parsed success path=${dataPath}")
         flock(lockFd, LOCK_UN)
         close(lockFd)
         value

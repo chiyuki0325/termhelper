@@ -32,14 +32,6 @@
   output-type = "executable"
   compile-option = "-Woff unused"
 
-[package.package-configuration."termhelper.tests.http_sigabrt_repro"]
-  output-type = "executable"
-  compile-option = "-Woff unused"
-
-[package.package-configuration."termhelper.tests.json_config_sigabrt_repro"]
-  output-type = "executable"
-  compile-option = "-Woff unused"
-
 [package.package-configuration."termhelper.tests.pty_integration"]
   output-type = "executable"
   compile-option = "-Woff unused"

@@ -45,6 +45,11 @@ public func setOpenAIResponseFormat(req: ChatRequest, schemaTitle: String, schem
     req.responseFormat = Some(ResponseFormat.JsonSchema(schemaTitle, schemaJson))
 }
 
+/// 为 OpenAI / Compatible Provider 设置 json_object response_format
+public func setOpenAIJsonObjectResponseFormat(req: ChatRequest): Unit {
+    req.responseFormat = Some(ResponseFormat.JsonObject)
+}
+
 /// 为 Anthropic Provider 设置 Structured Output（使用 json tool）
 /// Anthropic 不支持原生的 response_format，需要通过 tool_use 实现
 public func setAnthropicStructuredOutput(req: ChatRequest, schemaTitle: String, schemaJson: String): Unit {

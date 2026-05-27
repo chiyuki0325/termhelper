@@ -42,9 +42,13 @@ public class Session {
     }
 
     private func runLlm(query: String): LLMResponse {
+        debugTrace("Session.runLlm: building request")
         let req = requestBuilder.build(query, history, context, config)
+        debugTrace("Session.runLlm: request built, calling provider.chat")
         let chatResp = withLlmRetry(config.retry, { => provider.chat(req) })
+        debugTrace("Session.runLlm: provider.chat returned finishReason=${chatResp.finishReason}, content_size=${chatResp.content.size}, tool_calls=${chatResp.toolCalls.size}")
         let parsed = parseStructuredResponse(chatResp)
+        debugTrace("Session.runLlm: structured response parsed")
         handleResponse(parsed)
     }
 
@@ -54,9 +58,13 @@ public class Session {
             jsonText = chatResp.toolCalls[0].arguments.trimAscii()
         }
 
+        debugTrace("Session.parseStructuredResponse: json_text_size=${jsonText.size}, json_text=${jsonText}")
         match (parseLLMResponseJson(jsonText)) {
-            case Some(resp) => resp
+            case Some(resp) =>
+                debugTrace("Session.parseStructuredResponse: parse ok")
+                resp
             case None =>
+                debugTrace("Session.parseStructuredResponse: parse failed")
                 LLMResponse.Clarify(ClarifyData("LLM 返回无法解析为 termhelper 结构化响应。原始 finishReason: ${chatResp.finishReason}"))
         }
     }

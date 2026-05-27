@@ -89,7 +89,7 @@
 
 | 任务 | 说明 | 预估人天 | 可并行 |
 |------|------|----------|--------|
-| 实现 `infra/config.cj` | 配置加载器：环境变量读取（`LLM_API_KEY` 等）→ JSON 文件（`~/.config/termhelper/config.json`，权限 0600）→ 默认值三层 fallback。支持 `Config` 结构体的反序列化。若文件不存在则创建目录和默认配置文件。 | 1 | 是 |
+| 实现 `infra/config.cj` | 配置加载器：环境变量读取（`LLM_API_KEY` 等）→ JSON 文件（`~/.config/termhelper/config.json`，权限 0600）→ 默认值三层 fallback。支持 `Config` 结构体的反序列化。若文件不存在则创建目录和默认配置文件。LLM 配置支持 `structured_output_mode`，默认 `auto`；OpenAI-compatible Provider 可设置为 `json_object` 以跳过不被兼容服务支持的 `json_schema` 请求。 | 1 | 是 |
 | 实现配置首次交互式输入 | 当 API Key 无任何来源时，返回"需要配置"信号（具体 TUI prompt 由上层实现），接收用户输入后写回 config.json | 0.5 | — |
 
 ### 2.2 PTY 基础设施
@@ -151,7 +151,7 @@
 
 | 任务 | 说明 | 预估人天 | 可并行 |
 |------|------|----------|--------|
-| 实现 `adapters/openai_compat.cj` | OpenAI 协议兼容实现：构造 `/v1/chat/completions` 请求、处理 `response_format: { type: "json_schema", json_schema: {...} }` 的 Structured Output 配置、流式（`stream: true`）SSE 事件处理（`delta.content` 拼接）、非流式完整响应处理。覆盖 OpenAI / DeepSeek / Moonshot 等兼容服务 | 2 | 是 |
+| 实现 `adapters/openai_compat.cj` | OpenAI 协议兼容实现：构造 `/v1/chat/completions` 请求、处理 `response_format: { type: "json_schema", json_schema: {...} }` 的 Structured Output 配置、流式（`stream: true`）SSE 事件处理（`delta.content` 拼接）、非流式完整响应处理。覆盖 OpenAI / DeepSeek / Moonshot 等兼容服务。支持 `structured_output_mode=auto` 时先用 `json_schema`、遇到不支持错误自动降级为 `json_object`；支持 `structured_output_mode=json_object` 时直接使用 `json_object`，避免每次多一次失败请求。 | 2 | 是 |
 
 ### 3.3 Anthropic Provider
 
@@ -420,6 +420,6 @@
 | 仓颉 FFI 不支持某些 libc 函数（如 `posix_openpt` / `ioctl`） | 1→2 | 阶段 1 优先验证；fallback：调用外部 C helper 程序桥接 |
 | `stdx.net.http` 流式读取或超时控制不满足需求 | 1→3 | 阶段 1 优先验证；fallback：使用仓颉 socket API 自行实现 HTTP 客户端 |
 | 虚拟终端 ANSI 解析器实现复杂度超预期 | 2→6 | 阶段 2 中评估；fallback：降级为行缓冲模式（每行刷新，不保留 ANSI 颜色/属性），牺牲视觉一致性 |
-| Structured Output 某 Provider 不支持 | 3→4 | stage 3 中验证；fallback：降级为 `response_format: json_object` + 容错提取 |
+| Structured Output 某 Provider 不支持 | 3→4 | stage 3 中验证；fallback：降级为 `response_format: json_object` + 容错提取；对 OpenAI-compatible Provider 提供 `structured_output_mode=json_object` 配置，允许用户绕过已知不支持 `json_schema` 的兼容服务 |
 | 仓颉 Channel / spawn / tryRecv API 不符合预期 | 1→4 | 阶段 1 优先验证；fallback：用互斥锁 + 条件变量替代 Channel 模式 |
 | PTY 节流策略导致交互延迟过高 | 6 | 阶段 6 中参数可调（interval / byte threshold），根据实际体验调整 |

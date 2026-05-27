@@ -25,6 +25,8 @@ public class RequestBuilder {
             setAnthropicStructuredOutput(req, "termhelper_response", schema)
         } else if (config.provider == "google") {
             setGoogleResponseFormat(req, "termhelper_response", schema)
+        } else if (config.llm.structuredOutputMode == "json_object") {
+            setOpenAIJsonObjectResponseFormat(req)
         } else {
             setOpenAIResponseFormat(req, "termhelper_response", schema)
         }

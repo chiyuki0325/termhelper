@@ -1,8 +1,10 @@
 package termhelper.adapters
 
 import termhelper.types.*
+import termhelper.infra.*
 import std.collection.ArrayList
 import stdx.net.http.*
+import stdx.net.tls.*
 import stdx.encoding.json.*
 import std.io.*
 import std.time.*
@@ -28,10 +30,13 @@ public class OpenAICompatProvider {
 
     /// 非流式对话
     public func chat(req: ChatRequest): ChatResponse {
-        let body = buildRequestBody(req, false)
-        let url = "${baseUrl}/chat/completions"
-        let respText = sendPost(url, body)
-        parseChatResponse(respText)
+        let parsed = chatCollect(req)
+        if (shouldFallbackToJsonObject(req, parsed)) {
+            debugTrace("OpenAICompat.chat: json_schema unavailable, retrying with json_object")
+            req.responseFormat = Some(ResponseFormat.JsonObject)
+            return chatCollect(req)
+        }
+        parsed
     }
 
     /// 流式对话（在当前线程同步调用回调，由调用方 spawn 管理后台执行）
@@ -48,13 +53,29 @@ public class OpenAICompatProvider {
         streamPost(url, body, onEvent)
     }
 
+    private func chatCollect(req: ChatRequest): ChatResponse {
+        let body = buildRequestBody(req, true)
+        let url = "${baseUrl}/chat/completions"
+        streamPost(url, body, { _ => () })
+    }
+
     // ── HTTP ──
 
     private func sendPost(url: String, body: String): String {
-        let client = ClientBuilder()
-            .readTimeout(Duration.second * timeoutSec)
-            .writeTimeout(Duration.second * timeoutSec)
-            .build()
+        debugTrace("OpenAICompat.sendPost: build client url=${url}, body_size=${body.size}")
+        let client = if (url.startsWith("https://")) {
+            let tlsConfig = TlsClientConfig()
+            ClientBuilder()
+                .tlsConfig(tlsConfig)
+                .readTimeout(Duration.second * timeoutSec)
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        } else {
+            ClientBuilder()
+                .readTimeout(Duration.second * timeoutSec)
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        }
         let req = HttpRequestBuilder()
             .post()
             .url(url)
@@ -62,42 +83,64 @@ public class OpenAICompatProvider {
             .header("Authorization", "Bearer " + apiKey)
             .body(body)
             .build()
+        debugTrace("OpenAICompat.sendPost: sending request")
         let resp = client.send(req)
+        debugTrace("OpenAICompat.sendPost: got status=${resp.status}")
         if (resp.status != 200) {
             let errBody = StringReader(resp.body).readToEnd()
+            debugTrace("OpenAICompat.sendPost: error body_size=${errBody.size}, body=${errBody}, closing client")
             client.close()
-            return "{\"error\": \"HTTP ${resp.status}: ${errBody}\"}"
+            let errObj = JsonObject()
+            errObj.put("error", JsonString("HTTP ${resp.status}: ${errBody}"))
+            return errObj.toJsonString()
         }
         let result = StringReader(resp.body).readToEnd()
+        debugTrace("OpenAICompat.sendPost: response body_size=${result.size}, closing client")
         client.close()
+        debugTrace("OpenAICompat.sendPost: done")
         result
     }
 
     private func streamPost(url: String, body: String, onEvent: (StreamEvent) -> Unit): ChatResponse {
-        let client = ClientBuilder()
-            .readTimeout(Duration.second * (timeoutSec * 3))  // 流式时间更长
-            .writeTimeout(Duration.second * timeoutSec)
-            .build()
+        debugTrace("OpenAICompat.streamPost: build client url=${url}, body_size=${body.size}")
+        let client = if (url.startsWith("https://")) {
+            let tlsConfig = TlsClientConfig()
+            ClientBuilder()
+                .tlsConfig(tlsConfig)
+                .readTimeout(Duration.second * (timeoutSec * 3))  // 流式时间更长
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        } else {
+            ClientBuilder()
+                .readTimeout(Duration.second * (timeoutSec * 3))  // 流式时间更长
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        }
         let req = HttpRequestBuilder()
             .post()
             .url(url)
             .header("Content-Type", "application/json")
             .header("Authorization", "Bearer " + apiKey)
+            .header("Accept", "text/event-stream")
             .body(body)
             .build()
         let resp = client.send(req)
+        debugTrace("OpenAICompat.streamPost: got status=${resp.status}")
 
         if (resp.status != 200) {
             let errBody = StringReader(resp.body).readToEnd()
+            debugTrace("OpenAICompat.streamPost: error body_size=${errBody.size}, body=${errBody}, closing client")
             client.close()
-            onEvent(StreamEvent.Error("HTTP ${resp.status}: ${errBody}"))
-            return ChatResponse.empty()
+            let errMsg = "HTTP ${resp.status}: ${errBody}"
+            onEvent(StreamEvent.Error(errMsg))
+            return ChatResponse(errBody, "error: ${errMsg}", Usage.empty())
         }
 
         let parser = SseParser()
         let buf = Array<UInt8>(4096, repeat: 0)
         var finalUsage = Usage.empty()
         var contentAccum = ""
+        var stopReason = ""
         var toolCallAccum = ArrayList<ToolCall>()
         // Per-block tracking for parallel tool calls
         var toolCallState = ArrayList<(String, String, String)>()  // (id, name, partial_json)
@@ -115,15 +158,26 @@ public class OpenAICompatProvider {
                             // accumulate any pending tool calls
                             for (ti in 0..toolCallState.size) {
                                 let (tcId, tcName, tcJson) = toolCallState[ti]
-                                toolCallAccum.add(ToolCall(tcId, tcName, tcJson))
+                                if (tcId.size > 0) {
+                                    toolCallAccum.add(ToolCall(tcId, tcName, tcJson))
+                                }
                             }
                             client.close()
-                            var resultDone = ChatResponse(contentAccum, "tool_calls", finalUsage)
+                            var resultDone = ChatResponse(contentAccum, if (stopReason.size > 0) { stopReason } else { "stop" }, finalUsage)
                             for (ti in 0..toolCallAccum.size) { resultDone.toolCalls.add(toolCallAccum[ti]) }
                             return resultDone
                         }
                         if (e.data.size > 0) {
-                            processOpenAIChunk(e.data, finalUsage, contentAccum, toolCallState, toolCallAccum, onEvent)
+                            let (contentDelta, finishReason, usage) = processOpenAIChunk(e.data, toolCallState, toolCallAccum, onEvent)
+                            if (contentDelta.size > 0) {
+                                contentAccum += contentDelta
+                            }
+                            if (finishReason.size > 0) {
+                                stopReason = finishReason
+                            }
+                            if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+                                finalUsage = usage
+                            }
                         }
                         evt = parser.tryGetEvent()
                     case None => break
@@ -133,20 +187,22 @@ public class OpenAICompatProvider {
         }
         client.close()
         onEvent(StreamEvent.Done(finalUsage))
-        var result = ChatResponse(contentAccum, "stop", finalUsage)
+        var result = ChatResponse(contentAccum, if (stopReason.size > 0) { stopReason } else { "stop" }, finalUsage)
         for (ti in 0..toolCallAccum.size) { result.toolCalls.add(toolCallAccum[ti]) }
         result
     }
 
     /// Process a single OpenAI SSE chunk
-    private func processOpenAIChunk(dataJson: String, currentUsage: Usage,
-                                    contentAccum: String, toolCallState: ArrayList<(String, String, String)>,
+    private func processOpenAIChunk(dataJson: String,
+                                    toolCallState: ArrayList<(String, String, String)>,
                                     toolCallAccum: ArrayList<ToolCall>,
-                                    onEvent: (StreamEvent) -> Unit): Unit {
-        // Note: contentAccum is returned via ChatResponse, toolCallState/toolCallAccum returned via response
+                                    onEvent: (StreamEvent) -> Unit): (String, String, Usage) {
         try {
             let jv = JsonValue.fromStr(dataJson)
             let root = jv.asObject()
+            let usage = parseUsage(root)
+            var contentDelta = ""
+            var finishReason = ""
 
             match (root.get("choices")) {
                 case Some(cArr) =>
@@ -162,6 +218,7 @@ public class OpenAICompatProvider {
                                         let d = dJv.asObject()
                                         let content = jsonGetString(d, "content", "")
                                         if (content.size > 0) {
+                                            contentDelta += content
                                             onEvent(StreamEvent.Chunk(content))
                                         }
                                         // Tool call delta
@@ -212,6 +269,9 @@ public class OpenAICompatProvider {
 
                                 // Finish reason
                                 let fr = jsonGetString(first, "finish_reason", "")
+                                if (fr.size > 0) {
+                                    finishReason = fr
+                                }
                                 if (fr == "tool_calls" || fr == "function_call") {
                                     // Drain pending tool calls
                                     for (ti in 0..toolCallState.size) {
@@ -228,7 +288,10 @@ public class OpenAICompatProvider {
                     }
                 case None => ()
             }
-        } catch (_: Exception) { () }
+            (contentDelta, finishReason, usage)
+        } catch (_: Exception) {
+            ("", "", Usage.empty())
+        }
     }
 
     // ── 请求构造 ──
@@ -383,10 +446,42 @@ public class OpenAICompatProvider {
                     } else {
                         ChatResponse.empty()
                     }
-                case None => ChatResponse.empty()
+                case None =>
+                    match (root.get("error")) {
+                        case Some(errJv) =>
+                            ChatResponse(jsonText, "error: ${errorToString(errJv)}", Usage.empty())
+                        case None => ChatResponse.empty()
+                    }
             }
         } catch (_: Exception) {
             ChatResponse.empty()
+        }
+    }
+
+    private func shouldFallbackToJsonObject(req: ChatRequest, resp: ChatResponse): Bool {
+        match (req.responseFormat) {
+            case Some(rf) =>
+                match (rf) {
+                    case ResponseFormat.JsonSchema(_, _) =>
+                        resp.finishReason.contains("response_format type is unavailable")
+                    case _ => false
+                }
+            case None => false
+        }
+    }
+
+    private func errorToString(errJv: JsonValue): String {
+        try {
+            match (errJv.kind()) {
+                case JsString => errJv.asString().getValue()
+                case JsObject =>
+                    let obj = errJv.asObject()
+                    let message = jsonGetString(obj, "message", "")
+                    if (message.size > 0) { message } else { errJv.toJsonString() }
+                case _ => errJv.toJsonString()
+            }
+        } catch (_: Exception) {
+            "unknown"
         }
     }
 

@@ -8,6 +8,18 @@ package termhelper.infra
 
 foreign func getenv(name: CString): CPointer<Int8>
 
+var debugTraceEnabled: Bool = false
+
+public func enableDebugTrace(): Unit {
+    debugTraceEnabled = true
+}
+
+public func debugTrace(message: String): Unit {
+    if (debugTraceEnabled || envGetOrDefault("TERMHELPER_TRACE", "") == "1") {
+        eprintln("[termhelper-trace] ${message}")
+    }
+}
+
 public func envGet(name: String): ?String {
     unsafe {
         let cname = LibC.mallocCString(name)

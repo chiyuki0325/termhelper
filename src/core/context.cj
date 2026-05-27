@@ -7,14 +7,13 @@ import stdx.encoding.json.*
 
 foreign func time(tloc: CPointer<Int64>): Int64
 
-let CONTEXT_PATH: String = "${envGetHome()}/.config/termhelper/context.json"
-
 public class ContextManager {
     public init() {}
 
     public func load(): EnvironmentContext {
-        if (fileExists(CONTEXT_PATH)) {
-            let raw = readJsonFileAtomic(CONTEXT_PATH)
+        let contextPath = termhelperContextPath()
+        if (fileExists(contextPath)) {
+            let raw = loadContextJson()
             match (migrateContextJson(raw)) {
                 case Some(obj) =>
                     let ctx = contextFromJson(obj)
@@ -39,7 +38,12 @@ public class ContextManager {
     }
 
     public func save(ctx: EnvironmentContext): Unit {
-        writeJsonFileAtomic(CONTEXT_PATH, contextToJson(ctx))
+        let contextPath = termhelperContextPath()
+        try {
+            writeFileString(contextPath, contextToJson(ctx).toString())
+        } catch (e: Exception) {
+            debugTrace("ContextManager.save: skip persist path=${contextPath}, err=${e.message}")
+        }
     }
 
     /// Merge JSON object fields into extras/tools for investigation results.
@@ -133,6 +137,15 @@ func detectPackageManager(): ?String {
         if (path.size > 0) { return Some(pm) }
     }
     None
+}
+
+func loadContextJson(): JsonValue {
+    let raw = readFileString(termhelperContextPath())
+    try {
+        JsonValue.fromStr(raw)
+    } catch (_: Exception) {
+        JsonObject()
+    }
 }
 
 func runAndTrim(command: String): String {

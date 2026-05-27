@@ -104,24 +104,38 @@ func joinArgsFrom(args: Array<String>, start: Int64): String {
 }
 
 func runDebug(query: String): Int64 {
-    let config = loadConfig()
+    enableDebugTrace()
+    debugTrace("runDebug: start query_size=${query.size}")
+    let config = try {
+        loadConfig()
+    } catch (e: Exception) {
+        println("配置加载失败: ${e.message}")
+        return 1
+    }
+    debugTrace("runDebug: config loaded provider=${config.provider}, base_url=${config.llm.baseUrl}, model=${config.llm.model}, timeout=${config.llm.timeoutSec}")
     if (needsInteractiveConfig(config)) {
         println("缺少 LLM API Key。请设置 LLM_API_KEY / OPENAI_API_KEY，或写入 ~/.config/termhelper/config.json。")
         return 1
     }
 
+    debugTrace("runDebug: loading context")
     let ctxManager = ContextManager()
     let ctx = ctxManager.load()
+    debugTrace("runDebug: creating provider")
     let provider = createProvider(config)
     let session = Session(provider, config, ctx)
+    debugTrace("runDebug: calling session.start")
     let response = session.start(query)
+    debugTrace("runDebug: session.start returned, serializing response")
     println(llmResponseToJsonString(response))
+    debugTrace("runDebug: done")
     return 0
 }
 
 func createProvider(config: Config): LLMProvider {
     let providerName = config.provider
     let baseUrl = providerBaseUrl(providerName, config.llm.baseUrl)
+    debugTrace("createProvider: provider=${providerName}, base_url=${baseUrl}")
     if (providerName == "anthropic") {
         LLMProvider.fromAnthropic(AnthropicProvider(baseUrl, config.llm.apiKey, config.llm.model, config.llm.timeoutSec))
     } else if (providerName == "google") {

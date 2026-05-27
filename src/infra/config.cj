@@ -16,15 +16,18 @@ public struct LlmConfig {
     public var timeoutSec: Int64
     public var connectTimeoutSec: Int64
     public var idleTimeoutSec: Int64
+    public var structuredOutputMode: String
 
     public init(apiKey: String, baseUrl: String, model: String,
-                timeoutSec: Int64, connectTimeoutSec: Int64, idleTimeoutSec: Int64) {
+                timeoutSec: Int64, connectTimeoutSec: Int64, idleTimeoutSec: Int64,
+                structuredOutputMode: String) {
         this.apiKey = apiKey; this.baseUrl = baseUrl; this.model = model
         this.timeoutSec = timeoutSec; this.connectTimeoutSec = connectTimeoutSec
         this.idleTimeoutSec = idleTimeoutSec
+        this.structuredOutputMode = structuredOutputMode
     }
     public static func defaults(): LlmConfig {
-        LlmConfig("", "https://api.openai.com/v1", "gpt-4o", 60, 10, 30)
+        LlmConfig("", "https://api.openai.com/v1", "gpt-4o", 60, 10, 30, "auto")
     }
 }
 
@@ -63,83 +66,53 @@ public struct Config {
     }
 }
 
-let CONFIG_DIR: String = "${envGetHome()}/.config/termhelper"
-let CONFIG_PATH: String = "${CONFIG_DIR}/config.json"
-
-// ── 权限检查 FFI (#12) ──
-
-@C
-struct Stat {
-    var st_dev: UInt64 = 0; var st_ino: UInt64 = 0; var st_nlink: UInt64 = 0
-    var st_mode: UInt32 = 0; var st_uid: UInt32 = 0; var st_gid: UInt32 = 0
-    var st_rdev: UInt64 = 0; var st_size: Int64 = 0
-    var st_blksize: Int64 = 0; var st_blocks: Int64 = 0
-    // 时间戳占位
-    var pad0: Int64 = 0; var pad1: Int64 = 0; var pad2: Int64 = 0
-}
-
-foreign func stat(path: CString, buf: CPointer<Stat>): Int32
-foreign func chmod(path: CString, mode: Int32): Int32
-
-let S_IFMT: UInt32 = 0o170000
-let S_IFREG: UInt32 = 0o100000
-let PERM_MASK: UInt32 = 0o777
-
-/// 检查并修正配置文件权限为 0600（修复 #12）
-func ensureConfigPermissions(configPath: String): Unit {
-    unsafe {
-        let cpath = LibC.mallocCString(configPath)
-        let statBuf = LibC.malloc<Stat>(count: 1)
-        statBuf.write(0, Stat())
-
-        if (stat(cpath, statBuf) == 0) {
-            let mode = statBuf.read(0).st_mode
-            let perm = mode & PERM_MASK
-            // 0600 = 0o600 = 384
-            if ((perm & 0o077) != 0) {
-                // 文件权限包含 group/other 访问位，修正为 0600
-                chmod(cpath, 0o600)
-            }
-        }
-        LibC.free(statBuf); LibC.free(cpath)
-    }
-}
-
 // ── 加载（含自动创建）──
 
 /// 加载配置，若目录/文件不存在则自动创建默认配置（修复 #1）
 public func loadConfig(): Config {
     var config = Config.defaults()
-    let p = Path(CONFIG_PATH)
+    let configDir = termhelperConfigDir()
+    let configPath = termhelperConfigPath()
+    let p = Path(configPath)
 
     // 确保配置目录存在
-    let dirP = Path(CONFIG_DIR)
+    let dirP = Path(configDir)
     if (!exists(dirP)) {
         Directory.create(dirP, recursive: true)
     }
 
     if (exists(p)) {
-        ensureConfigPermissions(CONFIG_PATH)  // 修复 #12
-        try {
-            let jv = readJsonFileAtomic(CONFIG_PATH)
-            let obj = jv.asObject()
-            config.provider = jsonGetString(obj, "provider", "openai_compat")
-            config.llm.apiKey = jsonGetString(obj, "api_key", "")
-            config.llm.baseUrl = jsonGetString(obj, "base_url", config.llm.baseUrl)
-            config.llm.model = jsonGetString(obj, "model", config.llm.model)
-            config.llm.timeoutSec = jsonGetInt(obj, "timeout_sec", config.llm.timeoutSec)
-            config.llm.connectTimeoutSec = jsonGetInt(obj, "connect_timeout_sec", config.llm.connectTimeoutSec)
-            config.llm.idleTimeoutSec = jsonGetInt(obj, "idle_timeout_sec", config.llm.idleTimeoutSec)
-            config.execution.spawnTimeoutSec = jsonGetInt(obj, "spawn_timeout_sec", config.execution.spawnTimeoutSec)
-            config.execution.ptyMaxRounds = jsonGetInt(obj, "pty_max_rounds", config.execution.ptyMaxRounds)
-            config.execution.ptyMinIntervalMs = jsonGetInt(obj, "pty_min_interval_ms", config.execution.ptyMinIntervalMs)
-            config.execution.ptyMinBytesThreshold = jsonGetInt(obj, "pty_min_bytes_threshold", config.execution.ptyMinBytesThreshold)
-            let mode = jsonGetString(obj, "pty_default_mode", "")
-            if (mode.size > 0) { config.execution.ptyDefaultMode = mode }
-            config.retry.maxRetries = jsonGetInt(obj, "max_retries", config.retry.maxRetries)
-            config.retry.baseDelayMs = jsonGetInt(obj, "base_delay_ms", config.retry.baseDelayMs)
-            config.retry.maxDelayMs = jsonGetInt(obj, "max_delay_ms", config.retry.maxDelayMs)
-        } catch (_: Exception) { /* 文件损坏，使用默认 */ }
+        restrictFileToOwner(configPath)
+        let raw = readFileString(configPath)
+        let jv = try {
+            JsonValue.fromStr(raw)
+        } catch (e: Exception) {
+            throw Exception("配置文件 JSON 解析失败: ${configPath}: ${e.message}")
+        }
+        debugTrace("loadConfig: json read success path=${configPath}")
+        let obj = try {
+            jv.asObject()
+        } catch (_: Exception) {
+            throw Exception("配置文件必须是 JSON Object: ${configPath}")
+        }
+        config.provider = jsonGetString(obj, "provider", "openai_compat")
+        config.llm.apiKey = jsonGetString(obj, "api_key", "")
+        config.llm.baseUrl = jsonGetString(obj, "base_url", config.llm.baseUrl)
+        config.llm.model = jsonGetString(obj, "model", config.llm.model)
+        config.llm.timeoutSec = jsonGetInt(obj, "timeout_sec", config.llm.timeoutSec)
+        config.llm.connectTimeoutSec = jsonGetInt(obj, "connect_timeout_sec", config.llm.connectTimeoutSec)
+        config.llm.idleTimeoutSec = jsonGetInt(obj, "idle_timeout_sec", config.llm.idleTimeoutSec)
+        config.llm.structuredOutputMode = jsonGetString(obj, "structured_output_mode", config.llm.structuredOutputMode)
+        config.execution.spawnTimeoutSec = jsonGetInt(obj, "spawn_timeout_sec", config.execution.spawnTimeoutSec)
+        config.execution.ptyMaxRounds = jsonGetInt(obj, "pty_max_rounds", config.execution.ptyMaxRounds)
+        config.execution.ptyMinIntervalMs = jsonGetInt(obj, "pty_min_interval_ms", config.execution.ptyMinIntervalMs)
+        config.execution.ptyMinBytesThreshold = jsonGetInt(obj, "pty_min_bytes_threshold", config.execution.ptyMinBytesThreshold)
+        let mode = jsonGetString(obj, "pty_default_mode", "")
+        if (mode.size > 0) { config.execution.ptyDefaultMode = mode }
+        config.retry.maxRetries = jsonGetInt(obj, "max_retries", config.retry.maxRetries)
+        config.retry.baseDelayMs = jsonGetInt(obj, "base_delay_ms", config.retry.baseDelayMs)
+        config.retry.maxDelayMs = jsonGetInt(obj, "max_delay_ms", config.retry.maxDelayMs)
+        debugTrace("loadConfig: parsed provider=${config.provider}, base_url=${config.llm.baseUrl}, model=${config.llm.model}, structured_output_mode=${config.llm.structuredOutputMode}, api_key_size=${config.llm.apiKey.size}")
     } else {
         // 文件不存在：创建默认配置（修复 #1）
         saveConfig(config)
@@ -170,6 +143,7 @@ public func needsInteractiveConfig(config: Config): Bool {
 // ── 保存 ──
 
 public func saveConfig(config: Config): Unit {
+    let configPath = termhelperConfigPath()
     let obj = JsonObject()
     obj.put("version", JsonInt(config.version))
     obj.put("provider", JsonString(config.provider))
@@ -179,6 +153,7 @@ public func saveConfig(config: Config): Unit {
     obj.put("timeout_sec", JsonInt(config.llm.timeoutSec))
     obj.put("connect_timeout_sec", JsonInt(config.llm.connectTimeoutSec))
     obj.put("idle_timeout_sec", JsonInt(config.llm.idleTimeoutSec))
+    obj.put("structured_output_mode", JsonString(config.llm.structuredOutputMode))
     obj.put("spawn_timeout_sec", JsonInt(config.execution.spawnTimeoutSec))
     obj.put("pty_default_mode", JsonString(config.execution.ptyDefaultMode))
     obj.put("pty_max_rounds", JsonInt(config.execution.ptyMaxRounds))
@@ -188,7 +163,8 @@ public func saveConfig(config: Config): Unit {
     obj.put("base_delay_ms", JsonInt(config.retry.baseDelayMs))
     obj.put("max_delay_ms", JsonInt(config.retry.maxDelayMs))
 
-    writeJsonFileAtomic(CONFIG_PATH, obj)
+    writeFileString(configPath, obj.toString())
+    restrictFileToOwner(configPath)
 }
 
 // ── 辅助 ──

@@ -1,8 +1,10 @@
 package termhelper.adapters
 
 import termhelper.types.*
+import termhelper.infra.*
 import std.collection.ArrayList
 import stdx.net.http.*
+import stdx.net.tls.*
 import stdx.encoding.json.*
 import std.io.*
 import std.time.*
@@ -51,10 +53,20 @@ public class AnthropicProvider {
     // ── HTTP ──
 
     private func sendPost(url: String, body: String): String {
-        let client = ClientBuilder()
-            .readTimeout(Duration.second * timeoutSec)
-            .writeTimeout(Duration.second * timeoutSec)
-            .build()
+        debugTrace("Anthropic.sendPost: build client url=${url}, body_size=${body.size}")
+        let client = if (url.startsWith("https://")) {
+            let tlsConfig = TlsClientConfig()
+            ClientBuilder()
+                .tlsConfig(tlsConfig)
+                .readTimeout(Duration.second * timeoutSec)
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        } else {
+            ClientBuilder()
+                .readTimeout(Duration.second * timeoutSec)
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        }
         let req = HttpRequestBuilder()
             .post()
             .url(url)
@@ -63,22 +75,39 @@ public class AnthropicProvider {
             .header("anthropic-version", "2023-06-01")
             .body(body)
             .build()
+        debugTrace("Anthropic.sendPost: sending request")
         let resp = client.send(req)
+        debugTrace("Anthropic.sendPost: got status=${resp.status}")
         if (resp.status != 200) {
             let errBody = StringReader(resp.body).readToEnd()
+            debugTrace("Anthropic.sendPost: error body_size=${errBody.size}, closing client")
             client.close()
-            return "{\"error\": \"HTTP ${resp.status}: ${errBody}\"}"
+            let errObj = JsonObject()
+            errObj.put("error", JsonString("HTTP ${resp.status}: ${errBody}"))
+            return errObj.toJsonString()
         }
         let result = StringReader(resp.body).readToEnd()
+        debugTrace("Anthropic.sendPost: response body_size=${result.size}, closing client")
         client.close()
+        debugTrace("Anthropic.sendPost: done")
         result
     }
 
     private func streamPost(url: String, body: String, onEvent: (StreamEvent) -> Unit): ChatResponse {
-        let client = ClientBuilder()
-            .readTimeout(Duration.second * (timeoutSec * 3))
-            .writeTimeout(Duration.second * timeoutSec)
-            .build()
+        debugTrace("Anthropic.streamPost: build client url=${url}, body_size=${body.size}")
+        let client = if (url.startsWith("https://")) {
+            let tlsConfig = TlsClientConfig()
+            ClientBuilder()
+                .tlsConfig(tlsConfig)
+                .readTimeout(Duration.second * (timeoutSec * 3))
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        } else {
+            ClientBuilder()
+                .readTimeout(Duration.second * (timeoutSec * 3))
+                .writeTimeout(Duration.second * timeoutSec)
+                .build()
+        }
         let req = HttpRequestBuilder()
             .post()
             .url(url)
