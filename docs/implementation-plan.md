@@ -36,7 +36,7 @@
 | 任务 | 说明 | 预估人天 | 可并行 |
 |------|------|----------|--------|
 | 验证 ratatui 全屏接管能力 | 测试 alternate screen 进入/退出、raw mode 终端控制、退出后终端状态恢复 | 0.5 | 是 |
-| 验证键盘事件读取 | 测试 `poll_event` 的按键识别（普通字符、方向键、Esc、Ctrl+C 等组合键）、非阻塞读取模式 | 0.5 | 是 |
+| 验证键盘事件读取 | 测试 `poll_event` 的按键识别（普通字符、方向键、Esc、Ctrl-C 等组合键）、非阻塞读取模式 | 0.5 | 是 |
 | 验证颜色渲染 | 测试前景色/背景色设置、粗体/下划线属性、橙色（危险警告色）渲染效果 | 0.5 | 是 |
 | 验证 alternate screen 启动耗时 | 计时 alternate screen 初始化到首帧渲染完成的耗时，评估冷启动性能余量 | 0.5 | 是 |
 | 验证终端 resize 事件 | 测试 SIGWINCH 到来时 ratatui 的 `terminal_size` 更新和重绘行为 | 0.5 | 是 |
@@ -237,7 +237,7 @@
 | 任务 | 说明 | 预估人天 | 可并行 |
 |------|------|----------|--------|
 | 实现 `tui/theme.cj` | 颜色常量定义：危险/提权 = 橙色 | 注意 = 黄色 | 安全/成功 = 绿色 | 错误 = 红色 | 正常信息 = 默认前景色。统一颜色获取函数，供所有 Screen 和 Component 调用 | 0.5 | — |
-| 实现 `tui/input.cj` | 键盘事件 → 应用动作转换：方向键导航、Enter 确认、Esc 返回、字母快捷键（R=运行、C=复制、M=修改）、Ctrl+C 中断。统一键盘绑定映射，返回到 Screen 可消费的 Action 枚举 | 0.5 | — |
+| 实现 `tui/input.cj` | 键盘事件 → 应用动作转换：方向键导航、Enter 确认、Esc 返回、字母快捷键（R=运行、C=复制、M=修改）、Ctrl-C 中断。统一键盘绑定映射，返回到 Screen 可消费的 Action 枚举 | 0.5 | — |
 | 实现 `tui/signal.cj` | 信号处理器注册（在主线程）：SIGINT/SIGTERM/SIGHUP/SIGWINCH 的 handler → 发送内部消息通知 TUI 主循环。panic hook 注册：恢复终端模式 + 退出 alternate screen + 清理活跃 PTY + 打印崩溃信息到 stderr | 1 | — |
 
 ### 5.2 TUI 主循环
@@ -264,7 +264,7 @@
 |------|------|----------|--------|
 | 实现 `tui/screens/loading.cj` Loading 屏 | Spinner 动画 + 流式 LLM 文本实时展示区域（`LLMChunk` 追加到文本缓冲区 → `Paragraph` + 自动换行渲染 + 可滚动查看）。支持重试提示展示（`LLMRetrying` 事件 → 显示重试次数和原因）。LLMDone → 由 TUI 主循环分发到 Result/Prompt/Error | 1.5 | 是 |
 | 实现 `tui/screens/result.cj` Result 屏 | 命令展示 + 分解说明 + 安全警告 + 选项菜单，组合 command_display / explanation / safety_badge / option_menu 组件。布局：上方 70% 展示命令和说明（可滚动），下方 30% 展示安全警告和选项菜单。用户选择后返回对应动作 | 1.5 | 是 |
-| 实现 `tui/screens/execute.cj` Execute 屏 | 普通命令执行展示：实时追加 stdout/stderr 行（`SpawnOutput` → 滚动区域追加），展示运行状态指示器，展示最终退出码和输出摘要。支持键盘中断（Ctrl+C → 向 spawn 模块发中断信号）。子进程完成后展示完整输出（可上下滚动） | 1.5 | — |
+| 实现 `tui/screens/execute.cj` Execute 屏 | 普通命令执行展示：实时追加 stdout/stderr 行（`SpawnOutput` → 滚动区域追加），展示运行状态指示器，展示最终退出码和输出摘要。支持键盘中断（Ctrl-C → 向 spawn 模块发中断信号）。子进程完成后展示完整输出（可上下滚动） | 1.5 | — |
 | 实现 `tui/screens/prompt.cj` Prompt 屏 | 三种子模式：（1）Investigate：展示调查理由 + 诊断命令列表（每条附带 rationale），支持逐条授权/拒绝或批量全部授权；（2）Clarify：展示 LLM 的提问，提供文本输入区供用户回答；（3）Modify：展示当前命令文本供参考 + 文本输入区供用户输入修改指示。用户提交后触发新一轮 LLM 调用 | 2 | 是 |
 | 实现 `tui/screens/error.cj` Error 屏 | 错误信息展示 + 分类图标（网络/API/超时/格式异常）。可重试错误 → 显示重试按钮 + 退出按钮。不可重试错误 → 显示配置检查提示 + 退出按钮。错误信息含原因描述和可操作的解决建议 | 1 | 是 |
 

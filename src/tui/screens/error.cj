@@ -9,6 +9,6 @@ public func renderError(message: String, retryable: Bool): String {
         out += sectionTitle("恢复")
         out += emptyState("按 Enter/R 重试上一次请求。")
     }
-    out += keyBar("Esc/Ctrl+C 退出")
+    out += keyBar("Esc / Ctrl-C 退出")
     out
 }

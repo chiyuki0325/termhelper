@@ -23,6 +23,6 @@ public func renderExecute(command: String, lines: ArrayList<String>, done: Bool,
     if (lines.size == 0) {
         out += emptyState("还没有输出。")
     }
-    out += keyBar("Ctrl+C 中断  Esc 返回")
+    out += if (done) { keyBar("Ctrl-C / Esc / Enter 退出") } else { keyBar("Ctrl-C 中断  Esc 返回") }
     out
 }

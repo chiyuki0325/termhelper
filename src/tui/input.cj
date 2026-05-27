@@ -16,7 +16,7 @@ public enum Action {
     | Toggle
     | Submit
     | Backspace
-    | TextChar(Rune)
+    | TextInput(String)
     | Noop
 }
 
@@ -30,13 +30,18 @@ public func mapEvent(eventHandle: Int64): ?Action {
 
     let code = eventGetKeyCode(eventHandle)
     let ch = eventGetKeyChar(eventHandle)
+    let text = eventGetKeyText(eventHandle)
 
-    if (ch >= Int8(32) && ch <= Int8(126)) {
+    if (text.size == 1 && ch >= Int8(32) && ch <= Int8(126)) {
         if (ch == Int8(114) || ch == Int8(82)) { return Some(Action.Run) }
         if (ch == Int8(99) || ch == Int8(67)) { return Some(Action.Copy) }
         if (ch == Int8(109) || ch == Int8(77)) { return Some(Action.Modify) }
         if (ch == Int8(32)) { return Some(Action.Toggle) }
-        return Some(Action.TextChar(Rune(Int32(ch))))
+        return Some(Action.TextInput(text))
+    }
+
+    if (text.size > 0) {
+        return Some(Action.TextInput(text))
     }
 
     if (ch == Int8(27) || code == 27) { return Some(Action.Back) }

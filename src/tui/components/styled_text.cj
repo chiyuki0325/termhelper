@@ -26,6 +26,7 @@ let COLOR_LIGHT_BLUE: Int32 = 13
 let COLOR_LIGHT_CYAN: Int32 = 15
 let COLOR_WHITE: Int32 = 16
 let MOD_BOLD: Int32 = 1
+let MOD_UNDERLINED: Int32 = 8
 
 public func createRichTextWidget(): Result<Int64, RatatuiException> {
     createStyledTextWidget()
@@ -61,6 +62,14 @@ public func styleCommand(): RichStyle {
 }
 
 public func styleInput(): RichStyle {
+    RichStyle(COLOR_WHITE, COLOR_DEFAULT, MOD_BOLD)
+}
+
+public func styleInputCursor(): RichStyle {
+    RichStyle(COLOR_WHITE, COLOR_DEFAULT, MOD_UNDERLINED)
+}
+
+public func styleBodyStrong(): RichStyle {
     RichStyle(COLOR_WHITE, COLOR_DEFAULT, MOD_BOLD)
 }
 

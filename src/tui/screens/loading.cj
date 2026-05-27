@@ -16,6 +16,6 @@ public func renderLoading(query: String, tick: Int64, streamedText: String, retr
     } else {
         out += wrapLine(streamedText, UI_WIDTH, "") + "\n"
     }
-    out += keyBar("Esc/Ctrl+C 退出")
+    out += keyBar("Esc / Ctrl-C 退出")
     out
 }

@@ -286,14 +286,22 @@ func handleResultAction(state: TuiAppState, config: Config, action: Action): Uni
 
 func handleExecuteAction(state: TuiAppState, action: Action): Unit {
     match (action) {
+        case Action.Confirm =>
+            if (state.executeDone) {
+                state.shouldExit = true
+            }
         case Action.Interrupt =>
-            match (state.activeSpawn) {
-                case Some(handle) => handle.interrupt()
-                case None => ()
+            if (state.executeDone) {
+                state.shouldExit = true
+            } else {
+                match (state.activeSpawn) {
+                    case Some(handle) => handle.interrupt()
+                    case None => ()
+                }
             }
         case Action.Back =>
             if (state.executeDone) {
-                state.screen = "result"
+                state.shouldExit = true
             } else {
                 match (state.activeSpawn) {
                     case Some(handle) => handle.interrupt()
@@ -342,8 +350,8 @@ func handleInvestigateAction(state: TuiAppState, session: Session, config: Confi
 
 func handleTextPromptAction(state: TuiAppState, session: Session, action: Action): Unit {
     match (action) {
-        case Action.TextChar(ch) =>
-            state.input += String(ch)
+        case Action.TextInput(text) =>
+            state.input += text
         case Action.Run =>
             state.input += "r"
         case Action.Copy =>
@@ -354,7 +362,7 @@ func handleTextPromptAction(state: TuiAppState, session: Session, action: Action
             state.input += " "
         case Action.Backspace =>
             if (state.input.size > 0) {
-                state.input = state.input[0..state.input.size - 1]
+                state.input = removeLastRune(state.input)
             }
         case Action.Confirm | Action.Submit =>
             if (state.input.trimAscii().size > 0) {
@@ -405,8 +413,11 @@ func pollExecute(state: TuiAppState): Unit {
     while (reading) {
         match (handle.tryReadLine()) {
             case Some(line) =>
-                let prefix = if (line.isStderr) { "标准错误: " } else { "标准输出: " }
-                state.executeLines.add(prefix + line.text)
+                if (line.isStderr) {
+                    state.executeLines.add("stderr: " + line.text)
+                } else {
+                    state.executeLines.add(line.text)
+                }
             case None =>
                 reading = false
         }
@@ -462,7 +473,7 @@ func openModify(state: TuiAppState, command: String): Unit {
     state.input = ""
     state.loadingText = ""
     state.screen = "prompt"
-    state.errorMessage = "当前命令:\n${command}"
+    state.errorMessage = "写出命令修改建议。\n\n当前命令:\n${command}"
 }
 
 func showError(state: TuiAppState, message: String, retryable: Bool): Unit {
@@ -552,7 +563,7 @@ func styledLoading(handle: Int64, query: String, frame: Int64, streamedText: Str
     } else {
         styledWrapped(handle, streamedText, UI_WIDTH, "", styleDefault())
     }
-    styledKeys(handle, "Esc/Ctrl+C 退出")
+    styledKeys(handle, "Esc / Ctrl-C 退出")
 }
 
 func styledResult(handle: Int64, data: CommandData, selected: Int64): Unit {
@@ -572,7 +583,7 @@ func styledResult(handle: Int64, data: CommandData, selected: Int64): Unit {
         richTextLine(handle, "  模型没有提供分解说明。", styleMuted())
     } else {
         for (item in data.explanation.breakdown) {
-            styledField(handle, item.component, item.explanation, styleDefault())
+            styledBreakdownItem(handle, item.component, item.explanation)
         }
     }
     richTextLine(handle)
@@ -609,13 +620,15 @@ func styledExecute(handle: Int64, command: String, lines: ArrayList<String>, don
     styledSection(handle, "输出")
     let start = if (lines.size > 14) { lines.size - 14 } else { 0 }
     for (i in start..lines.size) {
-        let lineStyle = if (lines[i].startsWith("标准错误:")) { styleErrorText() } else { styleDefault() }
-        styledWrapped(handle, "  " + lines[i], UI_WIDTH - 2, "  ", lineStyle)
+        let isErr = lines[i].startsWith("stderr: ")
+        let displayLine = if (isErr) { lines[i][8..] } else { lines[i] }
+        let lineStyle = if (isErr) { styleErrorText() } else { styleDefault() }
+        styledWrapped(handle, "  " + displayLine, UI_WIDTH - 2, "  ", lineStyle)
     }
     if (lines.size == 0) {
         richTextLine(handle, "  还没有输出。", styleMuted())
     }
-    styledKeys(handle, "Ctrl+C 中断  Esc 返回")
+    styledKeys(handle, if (done) { "Ctrl-C / Esc / Enter 退出" } else { "Ctrl-C 中断  Esc 返回" })
 }
 
 func styledPrompt(handle: Int64, state: TuiAppState): Unit {
@@ -664,14 +677,87 @@ func styledTextPrompt(handle: Int64, title: String, question: String, current: S
     }
     richTextLine(handle)
     styledSection(handle, "输入")
-    richTextSpan(handle, "  > ", styleSelected())
-    if (sensitive) {
-        for (_ in 0..current.size) { richTextSpan(handle, "*", styleInput()) }
-        richTextLine(handle)
-    } else {
-        richTextLine(handle, current, styleInput())
-    }
+    styledInputBox(handle, if (sensitive) { maskedInput(current) } else { current })
     styledKeys(handle, "Enter 提交  Esc 取消")
+}
+
+func styledInputBox(handle: Int64, value: String): Unit {
+    let width = UI_WIDTH - 4
+    richTextLine(handle, "  ┌" + repeatText("─", width) + "┐", styleMuted())
+    let contentWidth = width - 3
+    let lines = inputBoxLines(value, contentWidth)
+    for (i in 0..lines.size) {
+        let line = lines[i]
+        let isLast = i + 1 == lines.size
+        richTextSpan(handle, "  │ ", styleMuted())
+        richTextSpan(handle, line, styleInput())
+        if (isLast) {
+            richTextSpan(handle, " ", styleInputCursor())
+            richTextSpan(handle, repeatText(" ", contentWidth - displayWidth(line)), styleInput())
+        } else {
+            richTextSpan(handle, repeatText(" ", contentWidth + 1 - displayWidth(line)), styleInput())
+        }
+        richTextLine(handle, " │", styleMuted())
+    }
+    richTextLine(handle, "  └" + repeatText("─", width) + "┘", styleMuted())
+}
+
+func inputBoxLines(value: String, width: Int64): ArrayList<String> {
+    let lines = ArrayList<String>()
+    if (value.size == 0) {
+        lines.add("")
+        return lines
+    }
+
+    for (raw in value.split("\n")) {
+        appendWrappedInputLine(lines, raw, width)
+    }
+    if (lines.size == 0) {
+        lines.add("")
+    }
+    lines
+}
+
+func appendWrappedInputLine(lines: ArrayList<String>, raw: String, width: Int64): Unit {
+    if (raw.size == 0) {
+        lines.add("")
+        return
+    }
+
+    var line = ""
+    var lineWidth: Int64 = 0
+    for (r in raw.runes()) {
+        let piece = String(r)
+        let pieceWidth = displayWidth(piece)
+        if (lineWidth > 0 && lineWidth + pieceWidth > width) {
+            lines.add(line)
+            line = piece
+            lineWidth = pieceWidth
+        } else {
+            line += piece
+            lineWidth += pieceWidth
+        }
+    }
+    lines.add(line)
+}
+
+func removeLastRune(value: String): String {
+    let runes = value.toRuneArray()
+    if (runes.size <= 1) {
+        return ""
+    }
+
+    var result = ""
+    for (i in 0..(runes.size - 1)) {
+        result += String(runes[i])
+    }
+    result
+}
+
+func maskedInput(current: String): String {
+    var out = ""
+    for (_ in current.runes()) { out += "*" }
+    out
 }
 
 func styledError(handle: Int64, message: String, retryable: Bool): Unit {
@@ -687,7 +773,7 @@ func styledError(handle: Int64, message: String, retryable: Bool): Unit {
         styledSection(handle, "恢复")
         richTextLine(handle, "  按 Enter/R 重试上一次请求。", styleMuted())
     }
-    styledKeys(handle, "Esc/Ctrl+C 退出")
+    styledKeys(handle, "Esc / Ctrl-C 退出")
 }
 
 func styledOptionMenu(handle: Int64, items: ArrayList<MenuItem>, selected: Int64): Unit {
@@ -705,6 +791,13 @@ func styledSection(handle: Int64, title: String): Unit {
 func styledField(handle: Int64, label: String, value: String, valueStyle: RichStyle): Unit {
     richTextSpan(handle, "  " + label + "：", styleMuted())
     richTextLine(handle, value, valueStyle)
+}
+
+func styledBreakdownItem(handle: Int64, component: String, explanation: String): Unit {
+    richTextSpan(handle, "  ", styleDefault())
+    richTextSpan(handle, component, styleBodyStrong())
+    richTextSpan(handle, ": ", styleMuted())
+    richTextLine(handle, explanation, styleDefault())
 }
 
 func styledWrapped(handle: Int64, text: String, width: Int64, indent: String, lineStyle: RichStyle): Unit {

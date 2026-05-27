@@ -47,7 +47,7 @@ public func repeatText(text: String, count: Int64): String {
 
 public func padRight(text: String, width: Int64): String {
     var out = trimToWidth(text, width)
-    while (out.size < width) {
+    while (displayWidth(out) < width) {
         out += " "
     }
     out
@@ -57,38 +57,71 @@ public func trimToWidth(text: String, width: Int64): String {
     if (width <= 0) {
         return ""
     }
-    if (text.size <= width) {
+    if (displayWidth(text) <= width) {
         return text
     }
     if (width <= 3) {
-        return text[0..width]
+        return fitToWidth(text, width)
     }
-    text[0..(width - 3)] + "..."
+    fitToWidth(text, width - 3) + "..."
 }
 
 public func wrapLine(text: String, width: Int64, indent: String): String {
-    if (width <= 0 || text.size <= width) {
+    if (width <= 0 || displayWidth(text) <= width) {
         return text
     }
     var out = ""
-    var remaining = text
     var first = true
-    while (remaining.size > width) {
-        let chunk = remaining[0..width]
-        if (first) {
-            out += chunk
-            first = false
+    var line = ""
+    var lineWidth: Int64 = 0
+
+    for (r in text.runes()) {
+        let piece = String(r)
+        let pieceWidth = runeWidth(piece)
+        if (lineWidth > 0 && lineWidth + pieceWidth > width) {
+            if (first) {
+                out += line
+                first = false
+            } else {
+                out += "\n" + indent + line
+            }
+            line = piece
+            lineWidth = pieceWidth
         } else {
-            out += "\n" + indent + chunk
+            line += piece
+            lineWidth += pieceWidth
         }
-        remaining = remaining[width..]
     }
-    if (remaining.size > 0) {
-        if (first) {
-            out += remaining
-        } else {
-            out += "\n" + indent + remaining
-        }
+
+    if (line.size > 0) {
+        if (first) { out += line } else { out += "\n" + indent + line }
     }
     out
+}
+
+public func displayWidth(text: String): Int64 {
+    var width: Int64 = 0
+    for (r in text.runes()) {
+        width += runeWidth(String(r))
+    }
+    width
+}
+
+func fitToWidth(text: String, width: Int64): String {
+    var out = ""
+    var used: Int64 = 0
+    for (r in text.runes()) {
+        let piece = String(r)
+        let pieceWidth = runeWidth(piece)
+        if (used + pieceWidth > width) {
+            return out
+        }
+        out += piece
+        used += pieceWidth
+    }
+    out
+}
+
+func runeWidth(piece: String): Int64 {
+    if (piece.size > 1) { 2 } else { 1 }
 }
