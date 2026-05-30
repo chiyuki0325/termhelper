@@ -163,10 +163,10 @@ public class Pty {
             let n = read(masterFd, buf, UInt64(bufSize))
             if (n <= 0) { LibC.free(buf); return "" }
 
-            var result = ""
-            for (i in 0..n) { result += String(Rune(Int32(buf.read(i)))) }
+            let arr = Array<UInt8>(n, repeat: 0)
+            for (i in 0..n) { arr[i] = buf.read(i) }
             LibC.free(buf)
-            result
+            String.fromUtf8(arr)
         }
     }
 

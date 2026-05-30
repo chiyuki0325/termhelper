@@ -242,37 +242,39 @@ func spawnInternal(command: String, timeoutMs: Int64, handle: ?SpawnHandle): Com
             // 读取 stdout
             let n1 = read(stdoutRead, readBuf, 4096)
             if (n1 > 0) {
-                for (i in 0..n1) {
-                    let b = readBuf.read(i)
-                    if (b == b'\n') {
-                        stdoutStr += stdoutLine + "\n"
-                        match (handle) {
-                            case Some(h) => h.addLine(OutputLine(stdoutLine, false))
-                            case None => ()
-                        }
-                        stdoutLine = ""
-                    } else {
-                        stdoutLine += String(Rune(Int32(b)))
+                let chunk = ptrToUtf8(readBuf, n1)
+                let combined = stdoutLine + chunk
+                stdoutLine = ""
+                let lines = combined.split("\n")
+                let lastIdx = lines.size - 1
+                for (i in 0..lastIdx) {
+                    let line = lines[i]
+                    stdoutStr += line + "\n"
+                    match (handle) {
+                        case Some(h) => h.addLine(OutputLine(line, false))
+                        case None => ()
                     }
                 }
+                stdoutLine = lines[lastIdx]
             }
 
             // 读取 stderr
             let n2 = read(stderrRead, readBuf, 4096)
             if (n2 > 0) {
-                for (i in 0..n2) {
-                    let b = readBuf.read(i)
-                    if (b == b'\n') {
-                        stderrStr += stderrLine + "\n"
-                        match (handle) {
-                            case Some(h) => h.addLine(OutputLine(stderrLine, true))
-                            case None => ()
-                        }
-                        stderrLine = ""
-                    } else {
-                        stderrLine += String(Rune(Int32(b)))
+                let chunk = ptrToUtf8(readBuf, n2)
+                let combined = stderrLine + chunk
+                stderrLine = ""
+                let lines = combined.split("\n")
+                let lastIdx = lines.size - 1
+                for (i in 0..lastIdx) {
+                    let line = lines[i]
+                    stderrStr += line + "\n"
+                    match (handle) {
+                        case Some(h) => h.addLine(OutputLine(line, true))
+                        case None => ()
                     }
                 }
+                stderrLine = lines[lastIdx]
             }
 
             // 子进程退出检查
@@ -300,12 +302,12 @@ func spawnInternal(command: String, timeoutMs: Int64, handle: ?SpawnHandle): Com
         // 消费剩余输出
         var n = read(stdoutRead, readBuf, 4096)
         while (n > 0) {
-            for (i in 0..n) { stdoutStr += String(Rune(Int32(readBuf.read(i)))) }
+            stdoutStr += ptrToUtf8(readBuf, n)
             n = read(stdoutRead, readBuf, 4096)
         }
         n = read(stderrRead, readBuf, 4096)
         while (n > 0) {
-            for (i in 0..n) { stderrStr += String(Rune(Int32(readBuf.read(i)))) }
+            stderrStr += ptrToUtf8(readBuf, n)
             n = read(stderrRead, readBuf, 4096)
         }
 
@@ -319,6 +321,16 @@ func spawnInternal(command: String, timeoutMs: Int64, handle: ?SpawnHandle): Com
 
         makeCommandResult(exitCode, stdoutStr, stderrStr)
     }
+}
+
+/// 将 CPointer<UInt8> 的指定长度数据转换为 UTF-8 字符串
+func ptrToUtf8(ptr: CPointer<UInt8>, count: Int64): String {
+    if (count <= 0) { return "" }
+    let arr = Array<UInt8>(count, repeat: 0)
+    unsafe {
+        for (i in 0..count) { arr[i] = ptr.read(i) }
+    }
+    String.fromUtf8(arr)
 }
 
 func makeCommandResult(exitCode: Int32, stdout: String, stderr: String): CommandResult {
