@@ -241,3 +241,15 @@ public class Pty {
         (ws.ws_col, ws.ws_row)
     }
 }
+
+// ── 主机终端大小查询（供 TUI 层调用，阶段 6）──
+
+/// 获取当前控制终端的窗口大小（cols, rows）。
+/// 通过 ioctl(STDIN_FILENO, TIOCGWINSZ) 获取，不依赖 PTY。
+public func getHostTerminalSize(): (UInt16, UInt16) {
+    var ws = Winsize(0, 0)
+    unsafe { ioctl(0, TIOCGWINSZ, inout ws) }
+    let cols: UInt16 = if (ws.ws_col < 40) { 80 } else { ws.ws_col }
+    let rows: UInt16 = if (ws.ws_row < 10) { 24 } else { ws.ws_row }
+    (cols, rows)
+}

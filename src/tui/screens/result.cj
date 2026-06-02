@@ -23,6 +23,7 @@ public func renderResult(data: CommandData, selected: Int64): String {
 public func resultMenu(interactive: Bool): ArrayList<MenuItem> {
     let items = ArrayList<MenuItem>()
     if (interactive) {
+        items.add(MenuItem("run_pty", uiText("menu_run_pty")))
         items.add(MenuItem("copy", uiText("menu_copy_command")))
         items.add(MenuItem("modify", uiText("menu_modify")))
         items.add(MenuItem("exit", uiText("menu_exit")))

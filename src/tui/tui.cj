@@ -7,6 +7,7 @@ import termhelper.infra.*
 import termhelper.i18n.*
 import termhelper.tui.screens.*
 import termhelper.tui.components.*
+import termhelper.adapters.*
 import std.collection.*
 import std.sync.*
 
@@ -67,6 +68,17 @@ class TuiAppState {
     var scrollOffset: Int64
     var maxScrollOffset: Int64
     var viewportHeight: Int64
+    // PTY agentic 状态（阶段 6）
+    var ptyCommand: String
+    var ptyOutput: String
+    var ptyOverlay: PtyOverlayData
+    var ptyState: String
+    var ptyTokenInput: Int64
+    var ptyTokenOutput: Int64
+    var ptyInput: String
+    var ptySensitiveInput: Bool
+    var ptyAgent: ?PtyAgentLoop
+    var ptyTerminalBuf: ?TerminalBuffer  // TUI 侧虚拟终端缓冲区（ANSI Cell→Span 渲染用）
 
     init(query: String) {
         this.queue = AppEventQueue()
@@ -97,6 +109,16 @@ class TuiAppState {
         this.scrollOffset = 0
         this.maxScrollOffset = 0
         this.viewportHeight = 20
+        this.ptyCommand = ""
+        this.ptyOutput = ""
+        this.ptyOverlay = PtyOverlayData()
+        this.ptyState = "waiting"
+        this.ptyTokenInput = 0
+        this.ptyTokenOutput = 0
+        this.ptyInput = ""
+        this.ptySensitiveInput = false
+        this.ptyAgent = None
+        this.ptyTerminalBuf = None
     }
 }
 
@@ -232,6 +254,22 @@ func handleAppEvent(state: TuiAppState, session: Session, event: AppEvent): Unit
             case SessionAction.ProviderError(message) => showError(state, message, true)
         }
         case AppEvent.LLMError(message) => showError(state, message, true)
+        case AppEvent.PtyScreenUpdate(text) =>
+            match (state.ptyTerminalBuf) {
+                case Some(buf) => buf.processString(text)
+                case None => ()
+            }
+            // 同时保留纯文本用于降级渲染
+            match (state.ptyTerminalBuf) {
+                case Some(buf) => state.ptyOutput = buf.toPlainText()
+                case None => state.ptyOutput = text
+            }
+        case AppEvent.PtyStateChange(loopState) =>
+            handlePtyStateChange(state, loopState)
+        case AppEvent.PtyOverlayUpdate(data) =>
+            state.ptyOverlay = data
+            state.ptyTokenInput = data.tokenInput
+            state.ptyTokenOutput = data.tokenOutput
         case _ => ()
     }
 }
@@ -247,6 +285,7 @@ func handleAction(state: TuiAppState, session: Session, config: Config, action: 
         case "execute" => handleExecuteAction(state, action)
         case "prompt" => handlePromptAction(state, session, config, action)
         case "error" => handleErrorAction(state, session, action)
+        case "pty" => handlePtyAction(state, action)
         case _ => ()
     }
 }
@@ -335,6 +374,8 @@ func handleResultAction(state: TuiAppState, config: Config, action: Action): Uni
             let item = menu[state.selected]
             if (item.key == "run") {
                 startExecute(state, data.command, config)
+            } else if (item.key == "run_pty") {
+                startPtyAgentic(state, data.command, config)
             } else if (item.key == "copy") {
                 copyCommandOrShowError(state, data.command)
             } else if (item.key == "modify") {
@@ -455,6 +496,263 @@ func handleErrorAction(state: TuiAppState, session: Session, action: Action): Un
     }
 }
 
+// ── PTY Agentic（阶段 6）──
+
+func handlePtyStateChange(state: TuiAppState, loopState: PtyLoopState): Unit {
+    match (loopState) {
+        case PtyLoopState.WaitingOutput => state.ptyState = "waiting"
+        case PtyLoopState.LLMDecision => state.ptyState = "llm_decision"
+        case PtyLoopState.AwaitingConfirm(content, reason) =>
+            state.ptyState = "awaiting_confirm"
+        case PtyLoopState.AwaitingUserInput(question, sensitive) =>
+            state.ptyState = "awaiting_input"
+            state.ptySensitiveInput = sensitive
+        case PtyLoopState.Finished(result) =>
+            state.ptyState = "finished"
+            state.ptyOutput = result.output
+        case PtyLoopState.Interrupted(reason) =>
+            state.ptyState = "interrupted"
+        case PtyLoopState.Throttled(ms) =>
+            state.ptyState = "throttled"
+        case PtyLoopState.RoundLimitReached =>
+            state.ptyState = "round_limit"
+    }
+}
+
+func startPtyAgentic(state: TuiAppState, command: String, config: Config): Unit {
+    state.ptyCommand = command
+    state.ptyOutput = ""
+    state.ptyOverlay = PtyOverlayData()
+    state.ptyOverlay.maxRounds = config.execution.ptyMaxRounds
+    state.ptyState = "waiting"
+    state.ptyTokenInput = 0
+    state.ptyTokenOutput = 0
+    state.ptyInput = ""
+    state.ptySensitiveInput = false
+    state.scrollOffset = 0
+    state.maxScrollOffset = 0
+    switchScreen(state, "pty")
+
+    // 获取真实终端大小（来自 infra 层）
+    let (cols, rows) = getHostTerminalSize()
+    debugTrace("startPtyAgentic: terminal_size=${rows}x${cols}")
+    // 创建 TUI 侧虚拟终端缓冲区（用于 Cell→Span ANSI 渲染）
+    state.ptyTerminalBuf = Some(TerminalBuffer(Int64(rows), Int64(cols)))
+
+    // 在后台启动 PtyAgentLoop
+    let queue = state.queue
+    let ptyCmd = command
+    spawn {
+        => try {
+            let ctxManager = ContextManager()
+            let ctx = ctxManager.load()
+            let provider = createPtyProvider(config)
+            let agent = PtyAgentLoop({e: AppEvent => queue.push(e)}, provider, config, ctx)
+            state.ptyAgent = Some(agent)
+            debugTrace("startPtyAgentic: running agent for command=${ptyCmd}")
+            let result = agent.run(ptyCmd, rows, cols)
+            debugTrace("startPtyAgentic: agent finished exitCode=${result.exitCode}")
+            state.ptyOutput = result.output
+            let finalOverlay = PtyOverlayData()
+            finalOverlay.mode = agent.getMode()
+            finalOverlay.roundCount = agent.getRound()
+            finalOverlay.maxRounds = config.execution.ptyMaxRounds
+            queue.push(AppEvent.PtyOverlayUpdate(finalOverlay))
+        } catch (e: Exception) {
+            debugTrace("startPtyAgentic: exception=${e.message}")
+            queue.push(AppEvent.PtyStateChange(PtyLoopState.Interrupted(e.message)))
+        }
+    }
+}
+
+func createPtyProvider(config: Config): LLMProvider {
+    let baseUrl = config.llm.baseUrl
+    let connectSec = config.llm.connectTimeoutSec
+    let readSec = config.llm.timeoutSec
+    let idleSec = config.llm.idleTimeoutSec
+    if (config.provider == "anthropic") {
+        LLMProvider.fromAnthropic(
+            AnthropicProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
+    } else if (config.provider == "google") {
+        LLMProvider.fromGoogle(GoogleProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
+    } else {
+        LLMProvider.fromOpenAI(
+            OpenAICompatProvider(baseUrl, config.llm.apiKey, config.llm.model, connectSec, readSec, idleSec))
+    }
+}
+
+func handlePtyAction(state: TuiAppState, action: Action): Unit {
+    match (state.ptyState) {
+        case "awaiting_confirm" => handlePtyConfirmAction(state, action)
+        case "awaiting_input" => handlePtyInputAction(state, action)
+        case "round_limit" => handlePtyRoundLimitAction(state, action)
+        case "finished" | "interrupted" => handlePtyDoneAction(state, action)
+        case _ => handlePtyDefaultAction(state, action)
+    }
+}
+
+func handlePtyDefaultAction(state: TuiAppState, action: Action): Unit {
+    match (action) {
+        case Action.Back | Action.Interrupt =>
+            match (state.ptyAgent) {
+                case Some(agent) => agent.requestInterrupt()
+                case None => ()
+            }
+            state.shouldExit = true
+        case Action.ScrollUp =>
+            if (state.scrollOffset > 0) { state.scrollOffset -= 1 }
+        case Action.ScrollDown =>
+            state.scrollOffset += 1
+            if (state.maxScrollOffset > 0 && state.scrollOffset > state.maxScrollOffset) {
+                state.scrollOffset = state.maxScrollOffset
+            }
+        case Action.PageUp =>
+            state.scrollOffset -= 15
+            if (state.scrollOffset < 0) { state.scrollOffset = 0 }
+        case Action.PageDown =>
+            state.scrollOffset += 15
+        // Toggle full auto mode with 'A' key
+        case Action.TextInput(text) =>
+            if (text.size == 1) {
+                let ch = text[0]
+                if (ch == b'A' || ch == b'a') {
+                    match (state.ptyAgent) {
+                        case Some(agent) =>
+                            let newMode = match (state.ptyOverlay.mode) {
+                                case PtyMode.FullAuto => PtyMode.Confirm
+                                case PtyMode.Confirm => PtyMode.FullAuto
+                            }
+                            agent.switchMode(newMode)
+                            state.ptyOverlay.mode = newMode
+                        case None => ()
+                    }
+                }
+            }
+        case _ => ()
+    }
+}
+
+func handlePtyConfirmAction(state: TuiAppState, action: Action): Unit {
+    match (action) {
+        case Action.Confirm =>
+            // 确认写入
+            match (state.ptyAgent) {
+                case Some(agent) => agent.submitUserAction("confirm")
+                case None => ()
+            }
+            state.ptyState = "waiting"
+        case Action.Back | Action.Interrupt =>
+            // 中断
+            match (state.ptyAgent) {
+                case Some(agent) =>
+                    agent.submitUserAction("interrupt")
+                    agent.requestInterrupt()
+                case None => ()
+            }
+            state.shouldExit = true
+        case Action.TextInput(text) =>
+            if (text.size == 1) {
+                let ch = text[0]
+                if (ch == b'D' || ch == b'd') {
+                    // 拒绝写入
+                    match (state.ptyAgent) {
+                        case Some(agent) => agent.submitUserAction("deny")
+                        case None => ()
+                    }
+                    state.ptyState = "waiting"
+                } else if (ch == b'A' || ch == b'a') {
+                    // 切换全自动并确认
+                    match (state.ptyAgent) {
+                        case Some(agent) =>
+                            agent.switchMode(PtyMode.FullAuto)
+                            agent.submitUserAction("full_auto")
+                            state.ptyOverlay.mode = PtyMode.FullAuto
+                        case None => ()
+                    }
+                    state.ptyState = "waiting"
+                }
+            }
+        case _ => ()
+    }
+}
+
+func handlePtyInputAction(state: TuiAppState, action: Action): Unit {
+    match (action) {
+        case Action.Confirm | Action.Submit =>
+            if (state.ptyInput.size > 0) {
+                let input = state.ptyInput
+                match (state.ptyAgent) {
+                    case Some(agent) => agent.submitUserAction("user_input:${input}")
+                    case None => ()
+                }
+                state.ptyInput = ""
+                state.ptyState = "waiting"
+            }
+        case Action.Back | Action.Interrupt =>
+            match (state.ptyAgent) {
+                case Some(agent) =>
+                    agent.submitUserAction("interrupt")
+                    agent.requestInterrupt()
+                case None => ()
+            }
+            state.shouldExit = true
+        case Action.TextInput(text) =>
+            state.ptyInput += text
+        case Action.Run => state.ptyInput += "r"
+        case Action.Copy => state.ptyInput += "c"
+        case Action.Modify => state.ptyInput += "m"
+        case Action.Toggle => state.ptyInput += " "
+        case Action.Backspace =>
+            if (state.ptyInput.size > 0) {
+                state.ptyInput = state.ptyInput[0..(state.ptyInput.size - 1)]
+            }
+        case _ => ()
+    }
+}
+
+func handlePtyRoundLimitAction(state: TuiAppState, action: Action): Unit {
+    match (action) {
+        case Action.Confirm =>
+            match (state.ptyAgent) {
+                case Some(agent) => agent.submitUserAction("continue")
+                case None => ()
+            }
+            state.ptyState = "waiting"
+        case Action.Back | Action.Interrupt =>
+            match (state.ptyAgent) {
+                case Some(agent) => agent.submitUserAction("interrupt")
+                case None => ()
+            }
+            state.shouldExit = true
+        case Action.TextInput(text) =>
+            if (text.size == 1) {
+                let ch = text[0]
+                if (ch == b'I' || ch == b'i') {
+                    match (state.ptyAgent) {
+                        case Some(agent) => agent.submitUserAction("interrupt")
+                        case None => ()
+                    }
+                    state.shouldExit = true
+                } else if (ch == b'M' || ch == b'm') {
+                    match (state.ptyAgent) {
+                        case Some(agent) => agent.submitUserAction("manual")
+                        case None => ()
+                    }
+                    state.shouldExit = true
+                }
+            }
+        case _ => ()
+    }
+}
+
+func handlePtyDoneAction(state: TuiAppState, action: Action): Unit {
+    match (action) {
+        case Action.Confirm | Action.Back | Action.Interrupt =>
+            state.shouldExit = true
+        case _ => ()
+    }
+}
+
 func startExecute(state: TuiAppState, command: String, config: Config): Unit {
     state.executeCommand = command
     state.executeLines = ArrayList<String>()
@@ -492,6 +790,10 @@ func pollExecute(state: TuiAppState): Unit {
 func cleanupActiveSpawn(state: TuiAppState): Unit {
     match (state.activeSpawn) {
         case Some(handle) => handle.interrupt()
+        case None => ()
+    }
+    match (state.ptyAgent) {
+        case Some(agent) => agent.requestInterrupt()
         case None => ()
     }
 }
@@ -611,25 +913,144 @@ func render(terminal: Int64, state: TuiAppState): Unit {
     // Do not manually free handles that have been attached to the terminal.
     let _ = clearTerminalWidgets(terminal)
     state.widgetHandle = None
-    match (createBlockWidget(screenTitle(state))) {
-        case Ok(handle) =>
-            let _ = setWidgetPosition(handle, 0, 0)
-            let _ = setWidgetSize(handle, 0, 0)
-            let _ = addWidgetToTerminal(terminal, handle)
-        case Err(_) => ()
-    }
-    if (!renderStyledContent(terminal, state, spinnerFrame)) {
-        match (createTextWidget(content)) {
+
+    // PTY 屏幕使用多 widget 布局（终端内容 + 固定底部 overlay）
+    if (state.screen == "pty") {
+        renderPtyMultiWidget(terminal, state, spinnerFrame)
+    } else {
+        match (createBlockWidget(screenTitle(state))) {
             case Ok(handle) =>
-                state.widgetHandle = Some(handle)
-                let _ = setWidgetPosition(handle, 2, 1)
+                let _ = setWidgetPosition(handle, 0, 0)
                 let _ = setWidgetSize(handle, 0, 0)
-                let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
                 let _ = addWidgetToTerminal(terminal, handle)
             case Err(_) => ()
         }
+        if (!renderStyledContent(terminal, state, spinnerFrame)) {
+            match (createTextWidget(content)) {
+                case Ok(handle) =>
+                    state.widgetHandle = Some(handle)
+                    let _ = setWidgetPosition(handle, 2, 1)
+                    let _ = setWidgetSize(handle, 0, 0)
+                    let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
+                    let _ = addWidgetToTerminal(terminal, handle)
+                case Err(_) => ()
+            }
+        }
     }
     let _ = drawTerminal(terminal)
+}
+
+/// PTY 多 widget 布局：顶部标题栏 + 中间终端内容 + 底部 overlay Block
+func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int64): Unit {
+    let termHeight = Int64(getTerminalHeight(terminal))
+    let termWidth: Int64 = 80   // 近似，SDK 未暴露终端宽度 API
+    let overlayRows: Int64 = 5   // 底部 overlay 固定行数
+    let contentHeight: Int64 = if (termHeight > overlayRows + 2) {
+        termHeight - overlayRows - 2
+    } else {
+        10
+    }
+
+    // 1. 标题栏 (Block widget, 行 0)
+    match (createBlockWidget(screenTitle(state))) {
+        case Ok(handle) =>
+            let _ = setWidgetPosition(handle, 0, 0)
+            let _ = setWidgetSize(handle, UInt16(termWidth), 0)
+            let _ = addWidgetToTerminal(terminal, handle)
+        case Err(_) => ()
+    }
+
+    // 2. 终端内容区域 (StyledText, 行 1, 高度 = contentHeight)
+    match (createRichTextWidget()) {
+        case Ok(handle) =>
+            // 渲染终端 Cell 内容到此 widget
+            fillPtyTerminalWidget(handle, state)
+            let _ = setWidgetPosition(handle, 0, 1)
+            let _ = setWidgetSize(handle, UInt16(termWidth), UInt16(contentHeight))
+            let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
+            let _ = addWidgetToTerminal(terminal, handle)
+            state.widgetHandle = Some(handle)
+        case Err(_) => ()
+    }
+
+    // 3. 底部 overlay 面板 (Block widget + StyledText 叠加, 行 = 1 + contentHeight)
+    let overlayY = 1 + contentHeight
+    match (createRichTextWidget()) {
+        case Ok(handle) =>
+            fillPtyOverlayWidget(handle, state)
+            let _ = setWidgetPosition(handle, 0, UInt16(overlayY))
+            let _ = setWidgetSize(handle, UInt16(termWidth), UInt16(overlayRows))
+            let _ = addWidgetToTerminal(terminal, handle)
+        case Err(_) => ()
+    }
+}
+
+/// 将终端 Cell 内容填充到 widget（仅终端输出，不含 overlay）
+func fillPtyTerminalWidget(handle: Int64, state: TuiAppState): Unit {
+    match (state.ptyTerminalBuf) {
+        case Some(buf) => renderTerminalCells(handle, buf, state.scrollOffset, state.maxScrollOffset)
+        case None => richTextLine(handle, "  " + uiText("pty_waiting_output"), styleMuted())
+    }
+}
+
+/// 将 overlay 面板内容填充到 widget
+func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
+    let data = state.ptyOverlay
+    let ptyState = state.ptyState
+
+    // 面板标题（带边框效果的 Block 标题行）
+    richTextLine(handle, "── " + uiText("pty_overlay_title") + " ──", styleSection())
+
+    let modeLabel = match (data.mode) {
+        case PtyMode.FullAuto => uiText("pty_full_auto")
+        case PtyMode.Confirm => uiText("pty_confirm")
+    }
+    let statusLabel = ptyStatusText(ptyState)
+    var infoLine = "  ${uiText("overlay_mode")}: ${modeLabel}"
+    infoLine += "  ${uiText("overlay_round")}: ${data.roundCount}/${data.maxRounds}"
+    infoLine += "  ${uiText("pty_tokens_used")}: ${data.tokenInput}+${data.tokenOutput}"
+    infoLine += "  [${statusLabel}]"
+    richTextLine(handle, infoLine, styleMuted())
+
+    // LLM 决策信息
+    match (data.llmDecision) {
+        case Some(d) =>
+            richTextSpan(handle, "  ${uiText("overlay_decision")}: ", styleMuted())
+            richTextLine(handle, d, styleInfo())
+        case None => ()
+    }
+    match (data.pendingWrite) {
+        case Some(content) =>
+            richTextSpan(handle, "  ${uiText("overlay_pending_write")}: ", styleMuted())
+            let short = if (content.size > 60) { content[0..60] + "..." } else { content }
+            richTextLine(handle, short, styleCommand())
+        case None => ()
+    }
+
+    // 交互按钮提示
+    if (ptyState == "awaiting_confirm") {
+        richTextSpan(handle, "  [Enter]${uiText("pty_confirm_write")} ", styleSuccess())
+        richTextSpan(handle, "[D]${uiText("pty_deny")} ", styleErrorText())
+        richTextSpan(handle, "[A]${uiText("pty_switch_auto")}", styleInfo())
+    } else if (ptyState == "round_limit") {
+        richTextSpan(handle, "  [Enter]${uiText("pty_continue")} ", styleSuccess())
+        richTextSpan(handle, "[I]${uiText("pty_interrupt")} ", styleErrorText())
+        richTextSpan(handle, "[M]${uiText("pty_manual")}", styleInfo())
+    }
+}
+
+func ptyStatusText(ptyState: String): String {
+    match (ptyState) {
+        case "waiting" => uiText("pty_status_waiting")
+        case "llm_decision" => uiText("pty_status_llm_decision")
+        case "awaiting_confirm" => uiText("pty_status_awaiting_confirm")
+        case "awaiting_input" => uiText("pty_status_awaiting_input")
+        case "throttled" => uiText("pty_status_throttled")
+        case "round_limit" => uiText("pty_status_round_limit")
+        case "finished" => uiText("pty_status_finished")
+        case "interrupted" => uiText("pty_status_interrupted")
+        case _ => ptyState
+    }
 }
 
 func renderStyledContent(terminal: Int64, state: TuiAppState, spinnerFrame: Int64): Bool {
@@ -657,6 +1078,9 @@ func buildStyledScreen(handle: Int64, state: TuiAppState, spinnerFrame: Int64): 
             state.executeResult)
         case "prompt" => styledPrompt(handle, state)
         case "error" => styledError(handle, state.errorMessage, state.retryable)
+        case "pty" => styledPtyAgentic(handle, state.ptyCommand, state.ptyTerminalBuf, state.ptyOverlay,
+            state.ptyState, state.scrollOffset, state.maxScrollOffset,
+            state.ptyInput, state.ptySensitiveInput)
         case _ => richTextLine(handle, uiText("app_title"), styleTitle())
     }
 }
@@ -1077,6 +1501,7 @@ func screenTitle(state: TuiAppState): String {
                 uiText("screen_modify")
             }
         case "error" => uiText("screen_error")
+        case "pty" => uiText("screen_pty")
         case _ => uiText("app_title")
     }
 }
@@ -1091,6 +1516,9 @@ func buildScreenText(state: TuiAppState, renderTick: Int64): String {
         case "execute" => renderExecute(state.executeCommand, state.executeLines, state.executeDone, state.executeResult)
         case "prompt" => buildPromptText(state)
         case "error" => renderError(state.errorMessage, state.retryable)
+        case "pty" => renderPtyAgentic(state.ptyCommand, state.ptyOutput, state.ptyOverlay,
+            state.ptyState, state.scrollOffset,
+            state.ptyInput, state.ptySensitiveInput)
         case _ => uiText("app_title") + "\n"
     }
 }

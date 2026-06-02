@@ -74,6 +74,8 @@ public class PtyOverlayData {
     public var pendingReason: Option<String> = None
     public var roundCount: Int64 = 0
     public var maxRounds: Int64 = 50
+    public var tokenInput: Int64 = 0
+    public var tokenOutput: Int64 = 0
 }
 
 @JsonAdapter
