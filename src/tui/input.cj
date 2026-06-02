@@ -23,10 +23,15 @@ public enum Action {
     | Submit
     | Backspace
     | TextInput(String)
+    | TerminalResize(UInt16, UInt16)
     | Noop
 }
 
 public func mapEvent(eventHandle: Int64): ?Action {
+    if (eventIsResize(eventHandle)) {
+        let (w, h) = eventGetResize(eventHandle)
+        return Some(Action.TerminalResize(w, h))
+    }
     if (!eventIsKey(eventHandle)) {
         if (eventIsMouse(eventHandle)) {
             let mouseCode = eventGetMouseCode(eventHandle)

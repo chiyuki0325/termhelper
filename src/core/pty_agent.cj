@@ -100,6 +100,7 @@ public class PtyAgentLoop {
     private var userAction: ?String
     private var interruptRequested: Bool
     private var modeSwitchRequested: ?PtyMode
+    private var resizeRequested: ?(UInt16, UInt16)
 
     // ── LLM 对话历史（仅 PTY agent 上下文）──
     private var decisionHistory: ArrayList<Message>
@@ -133,6 +134,7 @@ public class PtyAgentLoop {
         this.userAction = None
         this.interruptRequested = false
         this.modeSwitchRequested = None
+        this.resizeRequested = None
         this.decisionHistory = ArrayList<Message>()
         this.redactedPatterns = ArrayList<String>()
     }
@@ -149,6 +151,10 @@ public class PtyAgentLoop {
 
     public func switchMode(newMode: PtyMode): Unit {
         synchronized(mtx) { modeSwitchRequested = Some(newMode) }
+    }
+
+    public func requestResize(cols: UInt16, rows: UInt16): Unit {
+        synchronized(mtx) { resizeRequested = Some((cols, rows)) }
     }
 
     public func getState(): PtyLoopState { loopState }
@@ -203,6 +209,7 @@ public class PtyAgentLoop {
             }
 
             processModeSwitch()
+            processResize()
 
             let exited = p.childExited()
             let hasOutput = readAndProcessOutput(p)
@@ -503,6 +510,28 @@ public class PtyAgentLoop {
         }
     }
 
+    private func processResize(): Unit {
+        var size: ?(UInt16, UInt16) = None
+        synchronized(mtx) {
+            match (resizeRequested) {
+                case Some(s) => size = Some(s); resizeRequested = None
+                case None => ()
+            }
+        }
+        match (size) {
+            case Some((cols, rows)) =>
+                match (pty) {
+                    case Some(p) => p.resize(rows, cols)
+                    case None => ()
+                }
+                match (terminalBuf) {
+                    case Some(buf) => buf.resize(Int64(rows), Int64(cols))
+                    case None => ()
+                }
+            case None => ()
+        }
+    }
+
     // ── 浮层面板更新 ──
 
     private func pushOverlayUpdate(): Unit {
@@ -553,26 +582,25 @@ public class PtyAgentLoop {
 
     private func replaceAll(text: String, from: String, to: String): String {
         if (from.size == 0) { return text }
-        var result = ""
+        let textBytes = text.toArray()
+        let fromBytes = from.toArray()
+        var result = ArrayList<UInt8>()
         var i: Int64 = 0
-        while (i <= text.size - from.size) {
+        while (i <= textBytes.size - fromBytes.size) {
             var matched = true
-            for (j in 0..from.size) {
-                if (text[i + j] != from[j]) { matched = false; break }
+            for (j in 0..fromBytes.size) {
+                if (textBytes[i + j] != fromBytes[j]) { matched = false; break }
             }
             if (matched) {
-                result += to
-                i += from.size
+                for (b in to.toArray()) { result.add(b) }
+                i += fromBytes.size
             } else {
-                result += String(Rune(Int32(text[i])))
+                result.add(textBytes[i])
                 i += 1
             }
         }
-        while (i < text.size) {
-            result += String(Rune(Int32(text[i])))
-            i += 1
-        }
-        result
+        while (i < textBytes.size) { result.add(textBytes[i]); i += 1 }
+        String.fromUtf8(result.toArray())
     }
 }
 
@@ -632,11 +660,11 @@ func extractJsonString(json: String, key: String): String {
     }
     if (endQuote < 0) { return "" }
 
-    var result = ""
+    var resultBytes = ArrayList<UInt8>()
     for (i in (startQuote + 1)..endQuote) {
-        result += String(Rune(Int32(json[i])))
+        resultBytes.add(json[i])
     }
-    unescapeJson(result)
+    unescapeJson(String.fromUtf8(resultBytes.toArray()))
 }
 
 func extractJsonBool(json: String, key: String): Bool {
@@ -690,30 +718,32 @@ func findSubstring(text: String, pattern: String): Int64 {
 
 func substringFrom(text: String, start: Int64): String {
     if (start >= text.size) { return "" }
-    var result = ""
-    for (i in start..text.size) { result += String(Rune(Int32(text[i]))) }
-    result
+    let bytes = text.toArray()
+    var resultBytes = ArrayList<UInt8>()
+    for (i in start..bytes.size) { resultBytes.add(bytes[i]) }
+    String.fromUtf8(resultBytes.toArray())
 }
 
 func unescapeJson(text: String): String {
-    var result = ""
+    let bytes = text.toArray()
+    var result = ArrayList<UInt8>()
     var i: Int64 = 0
-    while (i < text.size) {
-        if (text[i] == b'\\' && i + 1 < text.size) {
-            let next = text[i + 1]
-            if (next == b'n') { result += "\n" }
-            else if (next == b't') { result += "\t" }
-            else if (next == b'r') { result += "\r" }
-            else if (next == b'"') { result += "\"" }
-            else if (next == b'\\') { result += "\\" }
-            else { result += String(Rune(Int32(next))) }
+    while (i < bytes.size) {
+        if (bytes[i] == b'\\' && i + 1 < bytes.size) {
+            let next = bytes[i + 1]
+            if (next == b'n') { result.add(b'\n') }
+            else if (next == b't') { result.add(b'\t') }
+            else if (next == b'r') { result.add(b'\r') }
+            else if (next == b'"') { result.add(b'"') }
+            else if (next == b'\\') { result.add(b'\\') }
+            else { result.add(next) }
             i += 2
         } else {
-            result += String(Rune(Int32(text[i])))
+            result.add(bytes[i])
             i += 1
         }
     }
-    result
+    String.fromUtf8(result.toArray())
 }
 
 /// 简易整数解析（本地实现，避免跨包引用）

@@ -68,6 +68,8 @@ class TuiAppState {
     var scrollOffset: Int64
     var maxScrollOffset: Int64
     var viewportHeight: Int64
+    var terminalWidth: Int64
+    var terminalHeight: Int64
     // PTY agentic 状态（阶段 6）
     var ptyCommand: String
     var ptyOutput: String
@@ -109,6 +111,8 @@ class TuiAppState {
         this.scrollOffset = 0
         this.maxScrollOffset = 0
         this.viewportHeight = 20
+        this.terminalWidth = 80
+        this.terminalHeight = 24
         this.ptyCommand = ""
         this.ptyOutput = ""
         this.ptyOverlay = PtyOverlayData()
@@ -270,11 +274,20 @@ func handleAppEvent(state: TuiAppState, session: Session, event: AppEvent): Unit
             state.ptyOverlay = data
             state.ptyTokenInput = data.tokenInput
             state.ptyTokenOutput = data.tokenOutput
+        case AppEvent.SignalReceived(sig) =>
+            cleanupActiveSpawn(state)
+            state.shouldExit = true
         case _ => ()
     }
 }
 
 func handleAction(state: TuiAppState, session: Session, config: Config, action: Action): Unit {
+    match (action) {
+        case Action.TerminalResize(w, h) =>
+            handleResize(state, Int64(w), Int64(h))
+            return
+        case _ => ()
+    }
     if (handleScrollAction(state, action)) {
         return
     }
@@ -496,6 +509,34 @@ func handleErrorAction(state: TuiAppState, session: Session, action: Action): Un
     }
 }
 
+// ── 终端 resize 处理 ──
+
+func handleResize(state: TuiAppState, width: Int64, height: Int64): Unit {
+    state.terminalWidth = width
+    state.terminalHeight = height
+    state.scrollOffset = 0
+    state.maxScrollOffset = 0
+    state.lastRenderedScrollOffset = -1
+
+    // PTY 屏幕：更新 PTY 终端大小 + 重建虚拟终端缓冲区
+    if (state.screen == "pty") {
+        let cols = if (width > 10) { width } else { 80 }
+        let rows = if (height > 5) { height - 5 } else { 20 }  // 减去 overlay 行数
+
+        // 通知 agent 更新 PTY slave 窗口大小
+        match (state.ptyAgent) {
+            case Some(agent) => agent.requestResize(UInt16(cols), UInt16(rows))
+            case None => ()
+        }
+
+        // 重建 TUI 侧虚拟终端缓冲区（新尺寸）
+        match (state.ptyTerminalBuf) {
+            case Some(buf) => buf.resize(rows, cols)
+            case None => state.ptyTerminalBuf = Some(TerminalBuffer(rows, cols))
+        }
+    }
+}
+
 // ── PTY Agentic（阶段 6）──
 
 func handlePtyStateChange(state: TuiAppState, loopState: PtyLoopState): Unit {
@@ -535,6 +576,8 @@ func startPtyAgentic(state: TuiAppState, command: String, config: Config): Unit 
 
     // 获取真实终端大小（来自 infra 层）
     let (cols, rows) = getHostTerminalSize()
+    state.terminalWidth = Int64(cols)
+    state.terminalHeight = Int64(rows)
     debugTrace("startPtyAgentic: terminal_size=${rows}x${cols}")
     // 创建 TUI 侧虚拟终端缓冲区（用于 Cell→Span ANSI 渲染）
     state.ptyTerminalBuf = Some(TerminalBuffer(Int64(rows), Int64(cols)))
@@ -942,8 +985,8 @@ func render(terminal: Int64, state: TuiAppState): Unit {
 
 /// PTY 多 widget 布局：顶部标题栏 + 中间终端内容 + 底部 overlay Block
 func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int64): Unit {
-    let termHeight = Int64(getTerminalHeight(terminal))
-    let termWidth: Int64 = 80   // 近似，SDK 未暴露终端宽度 API
+    let termHeight = state.terminalHeight
+    let termWidth = state.terminalWidth
     let overlayRows: Int64 = 5   // 底部 overlay 固定行数
     let contentHeight: Int64 = if (termHeight > overlayRows + 2) {
         termHeight - overlayRows - 2
@@ -988,7 +1031,12 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
 /// 将终端 Cell 内容填充到 widget（仅终端输出，不含 overlay）
 func fillPtyTerminalWidget(handle: Int64, state: TuiAppState): Unit {
     match (state.ptyTerminalBuf) {
-        case Some(buf) => renderTerminalCells(handle, buf, state.scrollOffset, state.maxScrollOffset)
+        case Some(buf) =>
+            let overlayRows: Int64 = 5
+            let titleRows: Int64 = 2
+            let vr = state.terminalHeight - overlayRows - titleRows
+            let visibleRows = if (vr > 4) { vr } else { 4 }
+            renderTerminalCells(handle, buf, state.scrollOffset, state.maxScrollOffset, visibleRows)
         case None => richTextLine(handle, "  " + uiText("pty_waiting_output"), styleMuted())
     }
 }

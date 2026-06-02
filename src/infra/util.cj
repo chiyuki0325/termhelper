@@ -63,6 +63,9 @@ foreign func kill(pid: Int32, sig: Int32): Int32
 
 let SIGTERM: Int32 = 15
 let SIGKILL: Int32 = 9
+let SIGINT: Int32 = 2
+let SIGHUP: Int32 = 1
+let SIGWINCH: Int32 = 28
 
 // ── 字符串工具 ──
 

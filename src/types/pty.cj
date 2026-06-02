@@ -51,6 +51,7 @@ public enum AppEvent {
     | PtyScreenUpdate(String)
     | PtyStateChange(PtyLoopState)
     | PtyOverlayUpdate(PtyOverlayData)
+    | SignalReceived(Int32)
     | ClipboardDone
     | ModifySubmitted(String)
     | ContextSaved

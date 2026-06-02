@@ -52,7 +52,7 @@ public func styledPtyAgentic(
     richTextLine(handle, uiText("pty_section_terminal"), styleSection())
     match (terminalBuf) {
         case Some(buf) =>
-            renderTerminalCells(handle, buf, scrollOffset, maxScroll)
+            renderTerminalCells(handle, buf, scrollOffset, maxScroll, 12)
         case None =>
             richTextLine(handle, "  " + uiText("pty_waiting_output"), styleMuted())
     }
@@ -109,9 +109,8 @@ public func styledPtyAgentic(
 // ── Cell→Span 渲染 ──
 
 /// 从 TerminalBuffer 的 Cell 网格渲染可见行，每个 Cell → ratatui Span
-public func renderTerminalCells(handle: Int64, buf: TerminalBuffer, scrollOffset: Int64, maxScroll: Int64): Unit {
+public func renderTerminalCells(handle: Int64, buf: TerminalBuffer, scrollOffset: Int64, maxScroll: Int64, visibleRows: Int64): Unit {
     let totalRows = buf.rows
-    let visibleRows: Int64 = 12
     let startRow = if (scrollOffset > 0) { scrollOffset } else { 0 }
     let endRow = ptyMin(startRow + visibleRows, totalRows)
 
