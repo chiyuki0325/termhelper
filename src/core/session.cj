@@ -69,6 +69,18 @@ public class Session {
         return runLlm(instruction)
     }
 
+    /// 流式 LLM 调用，通过 onChunk 回调发送增量文本给 TUI
+    public func startStream(query: String, onChunk: (String) -> Unit): LLMResponse {
+        history.add(makeMessage(MessageRole.User, query))
+        return runLlmStream(query, onChunk)
+    }
+
+    /// 流式修改指令后重新发起 LLM 调用
+    public func modifyStream(instruction: String, onChunk: (String) -> Unit): LLMResponse {
+        history.add(makeMessage(MessageRole.User, instruction))
+        return runLlmStream(instruction, onChunk)
+    }
+
     /// 处理 LLM 响应，返回下层动作供调用方消费。
     public func handleResponse(response: LLMResponse): SessionAction {
         let checked = applySafetyFallback(response)
@@ -132,6 +144,23 @@ public class Session {
         let parsed = parseStructuredResponse(chatResp)
         debugTrace("Session.runLlm: structured response parsed, preview=${safePreview(llmResponseToJsonString(parsed), 80)}")
         parsed
+    }
+
+    /// 流式 LLM 调用：通过 chatStream 接收增量文本，转发给 onChunk 回调
+    private func runLlmStream(query: String, onChunk: (String) -> Unit): LLMResponse {
+        debugTrace("Session.runLlmStream: building request")
+        let req = requestBuilder.build(query, history, context, config)
+        debugTrace("Session.runLlmStream: calling provider.chatStream")
+        let chatResp = provider.chatStream(req, { event: StreamEvent =>
+            match (event) {
+                case StreamEvent.Chunk(text) => onChunk(text)
+                case _ => ()
+            }
+        })
+        debugTrace(
+            "Session.runLlmStream: finished, finishReason=${chatResp.finishReason}, content_size=${chatResp.content.size}")
+        // 流式完成后解析结构化响应（复用相同的 parse 逻辑）
+        parseStructuredResponse(chatResp)
     }
 
     private func safePreview(text: String, maxRunes: Int64): String {

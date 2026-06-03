@@ -55,15 +55,59 @@ public class OpenAICompatProvider {
     }
 
     public func chatStream(req: ChatRequest, onEvent: (StreamEvent) -> Unit): ChatResponse {
+        // json_object mode: skip json_schema attempt
+        if (req.structuredOutputMode == "json_object") {
+            req.responseFormat = Some(ResponseFormat.JsonObject)
+            let body = buildRequestBody(req, true)
+            return streamPost("${baseUrl}/chat/completions", body, onEvent)
+        }
         let body = buildRequestBody(req, true)
-        let url = "${baseUrl}/chat/completions"
-        streamPost(url, body, onEvent)
+        let parsed = streamPost("${baseUrl}/chat/completions", body, onEvent)
+        if (shouldFallbackToJsonObject(req, parsed)) {
+            debugTrace("OpenAICompat.chatStream: json_schema unavailable, retrying with json_object")
+            req.responseFormat = Some(ResponseFormat.JsonObject)
+            if (req.fallbackSystemPrompts.size > 0) {
+                req.systemPrompts.clear()
+                for (i in 0..req.fallbackSystemPrompts.size) {
+                    req.systemPrompts.add(req.fallbackSystemPrompts[i])
+                }
+            }
+            match (req.fallbackSystemPrompt) {
+                case Some(p) => req.systemPrompt = Some(p)
+                case None => ()
+            }
+            let body2 = buildRequestBody(req, true)
+            return streamPost("${baseUrl}/chat/completions", body2, onEvent)
+        }
+        parsed
     }
 
     public func chatWithTools(req: ChatRequest, onEvent: (StreamEvent) -> Unit): ChatResponse {
+        // json_object mode: skip json_schema attempt
+        if (req.structuredOutputMode == "json_object") {
+            req.responseFormat = Some(ResponseFormat.JsonObject)
+            let body = buildRequestBody(req, true)
+            return streamPost("${baseUrl}/chat/completions", body, onEvent)
+        }
         let body = buildRequestBody(req, true)
-        let url = "${baseUrl}/chat/completions"
-        streamPost(url, body, onEvent)
+        let parsed = streamPost("${baseUrl}/chat/completions", body, onEvent)
+        if (shouldFallbackToJsonObject(req, parsed)) {
+            debugTrace("OpenAICompat.chatWithTools: json_schema unavailable, retrying with json_object")
+            req.responseFormat = Some(ResponseFormat.JsonObject)
+            if (req.fallbackSystemPrompts.size > 0) {
+                req.systemPrompts.clear()
+                for (i in 0..req.fallbackSystemPrompts.size) {
+                    req.systemPrompts.add(req.fallbackSystemPrompts[i])
+                }
+            }
+            match (req.fallbackSystemPrompt) {
+                case Some(p) => req.systemPrompt = Some(p)
+                case None => ()
+            }
+            let body2 = buildRequestBody(req, true)
+            return streamPost("${baseUrl}/chat/completions", body2, onEvent)
+        }
+        parsed
     }
 
     private func chatCollect(req: ChatRequest): ChatResponse {

@@ -6,6 +6,10 @@ import termhelper.adapters.*
 import termhelper.core.*
 import termhelper.util.*
 import termhelper.i18n.*
+import std.collection.*
+
+/// libc read(2) — 本地声明，用于从 stdin 读取
+foreign func read(fd: Int32, buf: CPointer<UInt8>, count: UInt64): Int64
 
 /// 程序入口
 /// 用法：
@@ -86,10 +90,60 @@ func joinArgsFrom(args: Array<String>, start: Int64): String {
     result
 }
 
+// ── API Key 交互式配置（定义在调用点之前）──
+
+/// 从 stdin 读取一行（逐字节读取，遇到换行停止）
+func readLineFromStdin(): String {
+    unsafe {
+        let bytes = ArrayList<UInt8>()
+        let buf = LibC.malloc<UInt8>(count: 1)
+        var i: Int64 = 0
+        while (i < 4096) {
+            let n = read(0, buf, 1)
+            if (n <= 0) { break }
+            let b = buf.read(0)
+            if (b == b'\n' || b == b'\r') { break }
+            bytes.add(b)
+            i += 1
+        }
+        LibC.free(buf)
+        String.fromUtf8(bytes.toArray())
+    }
+}
+
+/// 交互式 API Key 输入（无配置时调用）
+func promptApiKeyInteractive(): ?Config {
+    println(uiText("api_key_welcome"))
+    println(uiText("api_key_instructions"))
+    print(uiText("api_key_prompt"))
+
+    let key = readLineFromStdin()
+    if (key.size == 0) {
+        return None
+    }
+
+    // 加载或创建配置，写入 API Key 并保存
+    var config = try {
+        loadConfig()
+    } catch (_: Exception) {
+        // 无法加载配置时创建最小配置
+        let c = Config()
+        c.provider = "openai_compat"
+        c.llm.baseUrl = "https://api.openai.com/v1"
+        c
+    }
+    config.llm.apiKey = key.trimAscii()
+    saveConfig(config)
+    println(uiText("api_key_saved"))
+    Some(config)
+}
+
+// ── 主流程 ──
+
 func runDebug(query: String): Int64 {
     enableDebugTrace()
     debugTrace("runDebug: start query_size=${query.size}")
-    let config = try {
+    var config = try {
         loadConfig()
     } catch (e: Exception) {
         println(uiConfigLoadFailed(e.message))
@@ -98,8 +152,12 @@ func runDebug(query: String): Int64 {
     debugTrace(
         "runDebug: config loaded provider=${config.provider}, base_url=${config.llm.baseUrl}, model=${config.llm.model}, timeout=${config.llm.timeoutSec}")
     if (needsInteractiveConfig(config)) {
-        println(uiText("missing_api_key"))
-        return 1
+        match (promptApiKeyInteractive()) {
+            case Some(newConfig) => config = newConfig
+            case None =>
+                println(uiText("missing_api_key"))
+                return 1
+        }
     }
 
     debugTrace("runDebug: loading context")
@@ -117,15 +175,19 @@ func runDebug(query: String): Int64 {
 }
 
 func runQueryTui(query: String): Int64 {
-    let config = try {
+    var config = try {
         loadConfig()
     } catch (e: Exception) {
         println(uiConfigLoadFailed(e.message))
         return 1
     }
     if (needsInteractiveConfig(config)) {
-        println(uiText("missing_api_key"))
-        return 1
+        match (promptApiKeyInteractive()) {
+            case Some(newConfig) => config = newConfig
+            case None =>
+                println(uiText("missing_api_key"))
+                return 1
+        }
     }
 
     let ctxManager = ContextManager()

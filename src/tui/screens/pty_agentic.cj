@@ -162,8 +162,11 @@ func renderCellRow(handle: Int64, row: ArrayList<Cell>): Unit {
 }
 
 /// Cell 字符 → 可打印字符串
+/// Rune(0) = 双宽字符占位符，返回空串（不额外占列）
 func cellChar(cell: Cell): String {
-    if (cell.char <= r' ') {
+    if (cell.char == Rune(0)) {
+        ""   // 双宽字符占位符，不渲染
+    } else if (cell.char < r' ') {
         " "  // 控制字符显示为空格
     } else {
         String(cell.char)

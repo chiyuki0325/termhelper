@@ -132,12 +132,21 @@ public func initTUI(): Result<Int64, RatatuiException> {
 }
 
 /// 阶段 5 主流程入口。
+/// 包裹 try/catch 确保异常时恢复终端状态（panic hook 降级方案）。
 public func runApp(query: String, session: Session, config: Config): Result<Unit, RatatuiException> {
     match (initTUI()) {
         case Ok(terminal) =>
             let state = TuiAppState(query)
             startLlmTask(state.queue, session, query, false)
-            let loopResult = runLoop(terminal, state, session, config)
+            var loopResult: Result<Unit, RatatuiException> = Result.Ok(())
+            try {
+                loopResult = runLoop(terminal, state, session, config)
+            } catch (e: Exception) {
+                // 异常时确保清理：恢复终端模式 + 退出 alternate screen + 清理 PTY
+                cleanupActiveSpawn(state)
+                eprintln("[termhelper] error: ${e.message}")
+                loopResult = Result.Err(RatatuiException.ffiError(e.message))
+            }
             let _ = cleanupTUI(terminal)
             loopResult
         case Err(e) => Result.Err(e)
@@ -213,10 +222,11 @@ func runLoop(terminal: Int64, state: TuiAppState, session: Session, config: Conf
 func startLlmTask(queue: AppEventQueue, session: Session, text: String, modify: Bool): Unit {
     spawn {
         => try {
+            let onChunk = { chunk: String => queue.push(AppEvent.LLMChunk(chunk)) }
             let response = if (modify) {
-                session.modify(text)
+                session.modifyStream(text, onChunk)
             } else {
-                session.start(text)
+                session.startStream(text, onChunk)
             }
             queue.push(AppEvent.LLMDone(response))
         } catch (e: Exception) {

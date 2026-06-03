@@ -281,12 +281,61 @@ public class PtyAgentLoop {
         // 先发送原始输出给 TUI（含 ANSI 转义序列，供 Cell→Span 渲染）
         onEvent(AppEvent.PtyScreenUpdate(data))
 
+        // 检测密码回显模式（在发送给 LLM 之前脱敏）
+        detectPasswordEcho(data)
+
         // 再更新本地 TerminalBuffer（供 LLM 上下文 + 节流用）
         match (terminalBuf) {
             case Some(buf) => buf.processString(data)
             case None => ()
         }
         true
+    }
+
+    /// 检测 PTY 输出中的密码回显模式，将匹配内容加入脱敏列表
+    private func detectPasswordEcho(data: String): Unit {
+        // ANSI 转义序列剥离后的纯文本用于检测
+        let plain = stripAnsiEscapes(data)
+        let lines = plain.split("\n")
+        for (line in lines) {
+            let trimmed = line.trimAscii()
+            if (trimmed.size >= 4 && isAllMasked(trimmed)) {
+                // 连续 * 或 • 或 ● 字符 → 密码回显
+                if (!redactedPatterns.contains(trimmed)) {
+                    redactedPatterns.add(trimmed)
+                }
+            }
+        }
+    }
+
+    /// 检查字符串是否全部由掩码字符组成（*、•、●）
+    private func isAllMasked(s: String): Bool {
+        if (s.size == 0) { return false }
+        for (r in s.runes()) {
+            if (r != r'*' && r != r'•' && r != r'●') { return false }
+        }
+        true
+    }
+
+    /// 剥离 ANSI 转义序列（简化版，用于密码检测）
+    private func stripAnsiEscapes(text: String): String {
+        let bytes = text.toArray()
+        var result = ArrayList<UInt8>()
+        var i: Int64 = 0
+        while (i < bytes.size) {
+            if (bytes[i] == 27 && i + 1 < bytes.size && bytes[i + 1] == b'[') {
+                // ESC[ ... 序列，跳到字母结尾
+                i += 2
+                while (i < bytes.size && !((bytes[i] >= b'A' && bytes[i] <= b'Z') || (bytes[i] >= b'a' && bytes[i] <= b'z'))) {
+                    i += 1
+                }
+                if (i < bytes.size) { i += 1 }  // 跳过结尾字母
+            } else {
+                result.add(bytes[i])
+                i += 1
+            }
+        }
+        String.fromUtf8(result.toArray())
     }
 
     private func shouldThrottle(): Bool {

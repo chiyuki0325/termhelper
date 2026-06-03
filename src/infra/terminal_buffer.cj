@@ -116,6 +116,11 @@ public class TerminalBuffer {
     private var inCsi: Bool
     private var csiPrivate: Bool
 
+    // UTF-8 解码状态（多字节字符累积）
+    private var utf8Buf: Array<UInt8>
+    private var utf8Expected: Int64   // 当前多字节序列还需几个续接字节
+    private var utf8Total: Int64      // 当前序列总长度
+
     public init(rows: Int64, cols: Int64) {
         this.rows = rows
         this.cols = cols
@@ -139,6 +144,9 @@ public class TerminalBuffer {
         this.inEscape = false
         this.inCsi = false
         this.csiPrivate = false
+        this.utf8Buf = Array<UInt8>(4, repeat: 0)
+        this.utf8Expected = 0
+        this.utf8Total = 0
     }
 
     // ── 公开接口 ──
@@ -207,16 +215,24 @@ public class TerminalBuffer {
 
     // ── 输入处理：逐字节喂入 PTY 输出 ──
 
-    /// 处理一字节 PTY 输出
+    /// 处理一字节 PTY 输出（含 UTF-8 多字节解码）
     public func processByte(b: UInt8): Unit {
-        let ch = Rune(Int32(b))
+        // ESC 优先处理（无论 UTF-8 状态如何）
+        if (b == 27) {
+            // 如果正在累积 UTF-8 序列，先丢弃（不完整序列）
+            utf8Expected = 0
+            inEscape = true
+            ansiBuf = ""
+            return
+        }
 
+        // ANSI CSI 序列处理（非 UTF-8 文本）
         if (inCsi) {
-            processCsiByte(ch)
+            processCsiByte(Rune(Int32(b)))
             return
         }
         if (inEscape) {
-            if (ch == r'[') {
+            if (b == b'[') {
                 inEscape = false
                 inCsi = true
                 ansiBuf = ""
@@ -224,19 +240,70 @@ public class TerminalBuffer {
                 csiPrivate = false
             } else {
                 inEscape = false
-                processEscChar(ch)
+                processEscChar(Rune(Int32(b)))
             }
             return
         }
 
-        if (ch == RUNE_ESC) { // ESC
-            inEscape = true
-            ansiBuf = ""
+        // UTF-8 多字节解码
+        if (utf8Expected > 0) {
+            // 续接字节：必须是 10xxxxxx
+            if ((b & 0xC0) == 0x80) {
+                let idx = utf8Total - utf8Expected
+                utf8Buf[idx] = b
+                utf8Expected -= 1
+                if (utf8Expected == 0) {
+                    // 序列完成，解码为 Rune
+                    let arr = Array<UInt8>(utf8Total, repeat: 0)
+                    for (i in 0..utf8Total) { arr[i] = utf8Buf[i] }
+                    let s = String.fromUtf8(arr)
+                    if (s.size > 0) {
+                        let runes = s.toRuneArray()
+                        if (runes.size > 0) {
+                            putChar(runes[0])
+                        }
+                    }
+                }
+            } else {
+                // 非续接字节，丢弃不完整序列，按新字节处理
+                utf8Expected = 0
+                processByte(b)
+            }
             return
         }
 
-        // 普通字符
-        putChar(ch)
+        // 新字符开始
+        if (b < 0x80) {
+            // ASCII 单字节
+            if (b >= 32) {  // 可见 ASCII（空格及以上）
+                putChar(Rune(Int32(b)))
+            } else if (b == 10) {  // \n
+                putChar(r'\n')
+            } else if (b == 13) {  // \r
+                putChar(r'\r')
+            } else if (b == 9) {   // \t
+                putChar(r'\t')
+            } else if (b == 8) {   // BS
+                putChar(RUNE_BS)
+            }
+            // 其他控制字符忽略
+        } else if ((b & 0xE0) == 0xC0) {
+            // 2 字节序列: 110xxxxx
+            utf8Buf[0] = b
+            utf8Expected = 1
+            utf8Total = 2
+        } else if ((b & 0xF0) == 0xE0) {
+            // 3 字节序列: 1110xxxx（CJK 常用）
+            utf8Buf[0] = b
+            utf8Expected = 2
+            utf8Total = 3
+        } else if ((b & 0xF8) == 0xF0) {
+            // 4 字节序列: 11110xxx
+            utf8Buf[0] = b
+            utf8Expected = 3
+            utf8Total = 4
+        }
+        // 非法字节（10xxxxxx 开头但无起始字节）忽略
     }
 
     /// 处理一批 PTY 输出
@@ -268,16 +335,31 @@ public class TerminalBuffer {
             if (cursor.col >= cols) { cursor.col = cols - 1 }
         } else if (ch == RUNE_BS) { // BS
             if (cursor.col > 0) { cursor.col -= 1 }
-        } else if (ch >= r' ' && ch <= r'~') {
-            // 可见字符 (space=32, ~=126)
-            if (cursor.row >= 0 && cursor.row < rows && cursor.col >= 0 && cursor.col < cols) {
+        } else if (ch > r' ') {
+            // 可见字符（ASCII + Unicode，包括中文等多字节字符）
+            let w = charWidth(ch)
+            // 双宽字符：确保从偶数列开始，否则前面补空格
+            if (w == 2 && cursor.col % 2 != 0 && cursor.col + 2 <= cols) {
+                if (cursor.row >= 0 && cursor.row < rows) {
+                    grid[cursor.row][cursor.col] = Cell.empty()
+                }
+                cursor.col += 1
+            }
+            let fitsWidth = if (w == 2) { cursor.col + 2 <= cols } else { cursor.col < cols }
+            if (cursor.row >= 0 && cursor.row < rows && cursor.col >= 0 && fitsWidth) {
                 var cell = Cell(ch)
                 cell.fg = currentFg
                 cell.bg = currentBg
                 cell.attrs = currentAttrs
                 grid[cursor.row][cursor.col] = cell
             }
-            cursor.col += 1
+            // 双宽字符占两格：第二格放占位符
+            if (w == 2 && cursor.col + 2 <= cols) {
+                if (cursor.row >= 0 && cursor.row < rows) {
+                    grid[cursor.row][cursor.col + 1] = Cell(Rune(0))
+                }
+            }
+            cursor.col += w
             if (cursor.col >= cols) {
                 cursor.col = 0
                 cursor.row += 1
@@ -569,6 +651,20 @@ public class TerminalBuffer {
 }
 
 // ── 辅助函数 ──
+
+/// 字符显示宽度（CJK 全角字符返回 2，其他返回 1）
+/// 与 tui/components/layout.cj 中的 runeWidth 逻辑一致：
+/// UTF-8 多字节字符（绝大部分为 CJK / 全角）宽度为 2，单字节为 1
+func charWidth(ch: Rune): Int64 {
+    let s = String(ch)
+    let firstByte = s[0]
+    // UTF-8: 0xxxxxxx = 1 byte (ASCII), 110xxxxx = 2 bytes, 1110xxxx = 3 bytes (CJK), 11110xxx = 4 bytes
+    if (firstByte >= 0xC0) {
+        2
+    } else {
+        1
+    }
+}
 
 func parseInt64(s: String): Int64 {
     var result: Int64 = 0
