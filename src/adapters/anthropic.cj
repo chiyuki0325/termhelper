@@ -131,10 +131,17 @@ public class AnthropicProvider {
                         } else if (e.event == "content_block_start") {
                             // Track new content block using explicit index from event
                             let blockIdx = parseBlockIndex(e.data)
-                            let (blockType, toolName, toolId) = parseBlockStart(e.data)
+                            let (blockType, toolName, toolId, initialInput) = parseBlockStart(e.data)
                             ensureBlockSlot(blocks, blockIdx)
-                            blocks[blockIdx] = (blockType, toolName, toolId, "")
+                            blocks[blockIdx] = (blockType, toolName, toolId, initialInput)
                             if (blockType == "tool_use" && toolId.size > 0) {
+                                onEvent(StreamEvent.ToolCallStart(toolId))
+                                // Emit pre-populated input if present (programmatic tool calling)
+                                if (initialInput.size > 0) {
+                                    onEvent(StreamEvent.ToolCallDelta(toolId, initialInput))
+                                }
+                            } else if (blockType == "server_tool_use" && toolId.size > 0) {
+                                // Provider-executed tools (code_execution, web_fetch, web_search)
                                 onEvent(StreamEvent.ToolCallStart(toolId))
                             }
                         } else if (e.event == "content_block_delta") {
@@ -143,13 +150,13 @@ public class AnthropicProvider {
                                 let (blockType, toolName, toolId, partialJson) = blocks[blockIdx]
                                 let delta = extractDeltaText(e.data)
                                 if (delta.size > 0) {
-                                    if (blockType == "text" || blockType == "thinking") {
+                                    if (blockType == "text" || blockType == "thinking" || blockType == "redacted_thinking") {
                                         contentAccum += delta
                                         onEvent(StreamEvent.Chunk(delta))
-                                    } else if (blockType == "tool_use") {
+                                    } else if (blockType == "tool_use" || blockType == "server_tool_use") {
                                         let newJson = partialJson + delta
                                         blocks[blockIdx] = (blockType, toolName, toolId, newJson)
-                                        onEvent(StreamEvent.ToolCallDelta(delta))
+                                        onEvent(StreamEvent.ToolCallDelta(toolId, delta))
                                     }
                                 }
                             }
@@ -157,8 +164,8 @@ public class AnthropicProvider {
                             let blockIdx = parseBlockIndex(e.data)
                             if (blockIdx >= 0 && blockIdx < blocks.size) {
                                 let (blockType, toolName, toolId, partialJson) = blocks[blockIdx]
-                                if (blockType == "tool_use" && toolId.size > 0) {
-                                    onEvent(StreamEvent.ToolCallEnd(toolId, toolName))
+                                if ((blockType == "tool_use" || blockType == "server_tool_use") && toolId.size > 0) {
+                                    onEvent(StreamEvent.ToolCallEnd(toolId, toolName, partialJson))
                                 }
                             }
                         } else if (e.event == "message_delta") {
@@ -172,7 +179,7 @@ public class AnthropicProvider {
                             var toolCalls = ArrayList<ToolCall>()
                             for (bi in 0..blocks.size) {
                                 let (blockType, toolName, toolId, partialJson) = blocks[bi]
-                                if (blockType == "tool_use") {
+                                if (blockType == "tool_use" || blockType == "server_tool_use") {
                                     toolCalls.add(ToolCall(toolId, toolName, partialJson))
                                 }
                             }
@@ -201,7 +208,7 @@ public class AnthropicProvider {
         }
     }
 
-    private func parseBlockStart(dataJson: String): (String, String, String) {
+    private func parseBlockStart(dataJson: String): (String, String, String, String) {
         try {
             let jv = JsonValue.fromStr(dataJson)
             let root = jv.asObject()
@@ -209,12 +216,32 @@ public class AnthropicProvider {
                 case Some(cbJv) =>
                     let cb = cbJv.asObject()
                     let blockType = jsonGetString(cb, "type", "text")
-                    let toolName = if (blockType == "tool_use") { jsonGetString(cb, "name", "") } else { "" }
-                    let toolId = if (blockType == "tool_use") { jsonGetString(cb, "id", "") } else { "" }
-                    (blockType, toolName, toolId)
-                case None => ("text", "", "")
+                    var toolName = ""
+                    var toolId = ""
+                    var initialInput = ""
+                    if (blockType == "tool_use") {
+                        toolName = jsonGetString(cb, "name", "")
+                        toolId = jsonGetString(cb, "id", "")
+                        // Check for pre-populated input (programmatic tool calling)
+                        match (cb.get("input")) {
+                            case Some(inputJv) =>
+                                let inputStr = inputJv.toJsonString()
+                                if (inputStr != "{}" && inputStr.size > 0) {
+                                    initialInput = inputStr
+                                }
+                            case None => ()
+                        }
+                    } else if (blockType == "server_tool_use") {
+                        toolName = jsonGetString(cb, "name", "")
+                        toolId = jsonGetString(cb, "id", "")
+                    } else if (blockType == "thinking") {
+                        // thinking block — extract initial thinking text
+                        initialInput = jsonGetString(cb, "thinking", "")
+                    }
+                    (blockType, toolName, toolId, initialInput)
+                case None => ("text", "", "", "")
             }
-        } catch (_: Exception) { ("text", "", "") }
+        } catch (_: Exception) { ("text", "", "", "") }
     }
 
     private func parseBlockIndex(dataJson: String): Int64 {
@@ -319,17 +346,61 @@ public class AnthropicProvider {
             }
         }
 
-        // messages
+        // messages — 参照 convert-to-anthropic-prompt.ts 的消息分组逻辑
+        // Anthropic API 要求 user+tool 合并为一个 user message，
+        // assistant 消息保持独立。
         let msgs = JsonArray()
-        for (i in 0..req.messages.size) {
+        var i: Int64 = 0
+        while (i < req.messages.size) {
             let m = req.messages[i]
-            let mObj = JsonObject()
-            mObj.put("role", JsonString(anthropicRole(m.role)))
+            let role = m.role
+
+            match (role) {
+                case MessageRole.System =>
+                    // System messages 由 top-level system 字段处理，跳过
+                    i += 1
+                    continue
+                case MessageRole.Assistant =>
+                    let mObj = buildAssistantMessage(m)
+                    msgs.add(mObj)
+                    i += 1
+                    continue
+                case _ => () // User/Tool → fall through to grouping
+            }
+
+            // User / Tool → 合并为一个 user message
             let contentArr = JsonArray()
-            let textBlock = JsonObject()
-            textBlock.put("type", JsonString("text"))
-            textBlock.put("text", JsonString(m.content))
-            contentArr.add(textBlock)
+            while (i < req.messages.size) {
+                let cur = req.messages[i]
+                var stopGrouping = false
+                match (cur.role) {
+                    case MessageRole.Assistant => stopGrouping = true
+                    case MessageRole.System => stopGrouping = true
+                    case MessageRole.User =>
+                        let textBlock = JsonObject()
+                        textBlock.put("type", JsonString("text"))
+                        textBlock.put("text", JsonString(cur.content))
+                        contentArr.add(textBlock)
+                    case MessageRole.Tool =>
+                        // tool 消息 → tool_result block
+                        let trBlock = JsonObject()
+                        trBlock.put("type", JsonString("tool_result"))
+                        match (cur.toolCallId) {
+                            case Some(tcId) => trBlock.put("tool_use_id", JsonString(tcId))
+                            case None => () // 降级：不带 id
+                        }
+                        // 检测是否为错误结果
+                        if (cur.content.startsWith("error:") || cur.content.contains("\"error\"")) {
+                            trBlock.put("is_error", JsonBool(true))
+                        }
+                        trBlock.put("content", JsonString(cur.content))
+                        contentArr.add(trBlock)
+                }
+                if (stopGrouping) { break }
+                i += 1
+            }
+            let mObj = JsonObject()
+            mObj.put("role", JsonString("user"))
             mObj.put("content", contentArr)
             msgs.add(mObj)
         }
@@ -375,6 +446,47 @@ public class AnthropicProvider {
         }
 
         obj.toJsonString()
+    }
+
+    /// 构建 assistant message（含可选 tool_use blocks）
+    private func buildAssistantMessage(msg: Message): JsonObject {
+        let mObj = JsonObject()
+        mObj.put("role", JsonString("assistant"))
+        let contentArr = JsonArray()
+
+        // text content
+        if (msg.content.size > 0) {
+            let textBlock = JsonObject()
+            textBlock.put("type", JsonString("text"))
+            textBlock.put("text", JsonString(msg.content))
+            contentArr.add(textBlock)
+        }
+
+        // tool_use blocks
+        match (msg.toolCalls) {
+            case Some(tcs) =>
+                for (j in 0..tcs.size) {
+                    let tc = tcs[j]
+                    let tuBlock = JsonObject()
+                    tuBlock.put("type", JsonString("tool_use"))
+                    tuBlock.put("id", JsonString(tc.id))
+                    tuBlock.put("name", JsonString(tc.name))
+                    if (tc.arguments.size > 0) {
+                        try {
+                            tuBlock.put("input", JsonValue.fromStr(tc.arguments))
+                        } catch (_: Exception) {
+                            tuBlock.put("input", JsonObject())
+                        }
+                    } else {
+                        tuBlock.put("input", JsonObject())
+                    }
+                    contentArr.add(tuBlock)
+                }
+            case None => ()
+        }
+
+        mObj.put("content", contentArr)
+        mObj
     }
 
     private func anthropicSystemTextBlock(text: String, cache: Bool): JsonObject {

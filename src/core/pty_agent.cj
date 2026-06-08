@@ -153,6 +153,9 @@ public class PtyAgentLoop {
     // ── LLM 对话历史（仅 PTY agent 上下文）──
     private var decisionHistory: ArrayList<Message>
 
+    // ── 当前 tool call（用于 tool result 关联 tool_call_id）──
+    private var lastToolCall: ?ToolCall
+
     // ── 敏感内容脱敏 ──
     private var redactedPatterns: ArrayList<String>
 
@@ -184,6 +187,7 @@ public class PtyAgentLoop {
         this.modeSwitchRequested = None
         this.resizeRequested = None
         this.decisionHistory = ArrayList<Message>()
+        this.lastToolCall = None
         this.redactedPatterns = ArrayList<String>()
     }
 
@@ -217,6 +221,7 @@ public class PtyAgentLoop {
         this.totalInputTokens = 0
         this.totalOutputTokens = 0
         this.decisionHistory.clear()
+        this.lastToolCall = None
 
         // 初始化 debug FIFO
         ptyDebugInit()
@@ -434,7 +439,9 @@ public class PtyAgentLoop {
         let req = ChatRequest(config.llm.model)
         req.maxTokens = Some(2048)
         req.tools = Some(ptyToolDefinitions())
-        req.toolChoice = Some(ToolChoice.Required)
+        // Some providers (DeepSeek thinking mode) reject tool_choice entirely;
+        // omit it so the API defaults to auto — the model still sees the tools.
+        // req.toolChoice = Some(ToolChoice.Required)
         req.systemPrompt = Some(buildPtyAgentSystemPrompt(context))
 
         for (msg in decisionHistory) { req.messages.add(msg) }
@@ -466,12 +473,19 @@ public class PtyAgentLoop {
 
         match (toolCall) {
             case Some(tc) =>
+                lastToolCall = Some(tc)
                 let tool = parsePtyTool(tc.name, tc.arguments)
-                let assistantMsg = makeMessage(MessageRole.Assistant,
-                    "{\"tool\":\"${tc.name}\",\"arguments\":${tc.arguments}}")
+                // 构建 assistant 消息（含 tool_use block）
+                let assistantMsg = Message()
+                assistantMsg.role = MessageRole.Assistant
+                assistantMsg.content = ""  // 纯 tool call，无文本
+                var tcs = ArrayList<ToolCall>()
+                tcs.add(tc)
+                assistantMsg.toolCalls = Some(tcs)
                 decisionHistory.add(assistantMsg)
                 tool
             case None =>
+                lastToolCall = None
                 let text = resp.content
                 let short = if (text.size > 500) { text[0..500] + "..." } else { text }
                 ptyDebugLog("← LLM text(${text.size}b) finish=${resp.finishReason}: ${short}")
@@ -535,9 +549,7 @@ public class PtyAgentLoop {
         match (mode) {
             case PtyMode.FullAuto =>
                 let _ = p.writeData(content + "\n")
-                let toolMsg = makeMessage(MessageRole.Tool,
-                    "{\"result\":\"wrote ${content.size} bytes\"}")
-                decisionHistory.add(toolMsg)
+                addToolResultToHistory("{\"result\":\"wrote ${content.size} bytes\"}")
                 return true
             case _ => () // PtyMode.Confirm
         }
@@ -548,16 +560,13 @@ public class PtyAgentLoop {
         let action = waitForUserAction()
         if (action == "confirm") {
             let _ = p.writeData(content + "\n")
-            decisionHistory.add(makeMessage(MessageRole.Tool,
-                "{\"result\":\"user confirmed, wrote ${content.size} bytes\"}"))
+            addToolResultToHistory("{\"result\":\"user confirmed, wrote ${content.size} bytes\"}")
         } else if (action == "deny") {
-            decisionHistory.add(makeMessage(MessageRole.Tool,
-                "{\"result\":\"user denied write\"}"))
+            addToolResultToHistory("{\"result\":\"user denied write\"}")
         } else if (action == "full_auto") {
             mode = PtyMode.FullAuto
             let _ = p.writeData(content + "\n")
-            decisionHistory.add(makeMessage(MessageRole.Tool,
-                "{\"result\":\"switched to full_auto, wrote ${content.size} bytes\"}"))
+            addToolResultToHistory("{\"result\":\"switched to full_auto, wrote ${content.size} bytes\"}")
         }
         true
     }
@@ -573,8 +582,7 @@ public class PtyAgentLoop {
             let input = action["user_input:".size..]
             let _ = pty.getOrThrow().writeData(input + "\n")
             let displayInput = if (sensitive) { "[REDACTED]" } else { input }
-            decisionHistory.add(makeMessage(MessageRole.Tool,
-                "{\"result\":\"user provided input\"}"))
+            addToolResultToHistory("{\"result\":\"user provided input\"}")
             if (sensitive) { redactedPatterns.add(input) }
         } else if (action == "interrupt") {
             return false
@@ -595,8 +603,21 @@ public class PtyAgentLoop {
             processResize()
             if (checkInterrupt()) { return }
         }
-        decisionHistory.add(makeMessage(MessageRole.Tool,
-            "{\"result\":\"waited ${clamped}ms\"}"))
+        addToolResultToHistory("{\"result\":\"waited ${clamped}ms\"}")
+    }
+
+    // ── Tool result 消息辅助 ──
+
+    /// 添加 tool result 消息到对话历史（含 tool_call_id 关联）
+    private func addToolResultToHistory(result: String): Unit {
+        let msg = Message()
+        msg.role = MessageRole.Tool
+        msg.content = result
+        match (lastToolCall) {
+            case Some(ltc) => msg.toolCallId = Some(ltc.id)
+            case None => ()
+        }
+        decisionHistory.add(msg)
     }
 
     // ── 同步辅助 ──

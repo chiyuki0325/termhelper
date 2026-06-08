@@ -5,6 +5,7 @@ import naivejson.schema.*
 import naivejson.schema.model.*
 import naivejson.schema.render.*
 import std.collection.HashMap
+import std.collection.ArrayList
 import stdx.serialization.serialization.DataModel
 import stdx.serialization.serialization.DataModelStruct
 import stdx.serialization.serialization.DataModelString
@@ -31,6 +32,12 @@ public enum MessageRole {
 public class Message {
     public var role: MessageRole = MessageRole.User
     public var content: String = ""
+    /// tool 消息关联的 tool_use id（用于 multi-turn tool calling，运行时字段不序列化）
+    @JsonIgnore
+    public var toolCallId: Option<String> = None
+    /// assistant 消息中的 tool_use 列表（用于 multi-turn tool calling，运行时字段不序列化）
+    @JsonIgnore
+    public var toolCalls: Option<ArrayList<ToolCall>> = None
 }
 
 /// 环境上下文（跨会话持久化）

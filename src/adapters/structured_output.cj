@@ -1,5 +1,6 @@
 package termhelper.adapters
 
+import termhelper.types.*
 import std.collection.*
 import stdx.encoding.json.*
 

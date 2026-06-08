@@ -85,3 +85,39 @@ public class DiagnosticCommand {
 public class ClarifyData {
     public var question: String = ""
 }
+
+// ── Tool Calling 共享类型 ──
+
+/// 工具定义（发给 LLM）
+/// parameters 是 JSON Schema 字符串（在 Provider 中序列化为 JSON Object）
+public struct ToolDefinition {
+    public let name: String
+    public let description: String
+    public let parameters: String  // JSON Schema 字符串
+
+    public init(name: String, description: String, parameters: String) {
+        this.name = name
+        this.description = description
+        this.parameters = parameters
+    }
+}
+
+/// LLM 返回的工具调用
+public struct ToolCall {
+    public let id: String
+    public let name: String
+    public let arguments: String  // JSON 字符串
+
+    public init(id: String, name: String, arguments: String) {
+        this.id = id
+        this.name = name
+        this.arguments = arguments
+    }
+}
+
+/// Tool Choice
+public enum ToolChoice {
+    | Auto
+    | Required
+    | NoTool
+}

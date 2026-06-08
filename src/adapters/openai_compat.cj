@@ -262,9 +262,12 @@ public class OpenAICompatProvider {
                                                                     if (tcName.size > 0 && prevName.size == 0) { prevName = tcName }
                                                                     if (tcArgs.size > 0) {
                                                                         prevJson += tcArgs
-                                                                        onEvent(StreamEvent.ToolCallDelta(tcArgs))
+                                                                        let deltaId = if (tcId.size > 0) { tcId } else { prevId }
+                                                                        onEvent(StreamEvent.ToolCallDelta(deltaId, tcArgs))
                                                                     }
-                                                                    toolCallState[tcIdx] = (tcId, prevName, prevJson)
+                                                                    // 合并 id：当前 chunk 有 id 则覆盖，否则保留状态中的 id
+                                                                    let mergedId = if (tcId.size > 0) { tcId } else { prevId }
+                                                                    toolCallState[tcIdx] = (mergedId, prevName, prevJson)
                                                                 case None => ()
                                                             }
                                                         case None => ()
@@ -281,7 +284,7 @@ public class OpenAICompatProvider {
                                         let (tcId, tcName, tcJson) = toolCallState[ti]
                                         if (tcId.size > 0) {
                                             toolCallAccum.add(ToolCall(tcId, tcName, tcJson))
-                                            onEvent(StreamEvent.ToolCallEnd(tcId, tcName))
+                                            onEvent(StreamEvent.ToolCallEnd(tcId, tcName, tcJson))
                                         }
                                     }
                                     toolCallState.clear()
@@ -322,7 +325,43 @@ public class OpenAICompatProvider {
             let m = req.messages[i]
             let mObj = JsonObject()
             mObj.put("role", JsonString(roleToString(m.role)))
-            mObj.put("content", JsonString(m.content))
+
+            match (m.role) {
+                case MessageRole.Tool =>
+                    // Tool 消息：需要 tool_call_id 关联到对应的 tool_use
+                    match (m.toolCallId) {
+                        case Some(tcId) => mObj.put("tool_call_id", JsonString(tcId))
+                        case None => () // 降级：不带 id（某些 API 可能接受）
+                    }
+                    mObj.put("content", JsonString(m.content))
+                case MessageRole.Assistant =>
+                    // Assistant 消息：可能包含 tool_calls
+                    match (m.toolCalls) {
+                        case Some(tcs) =>
+                            // content 可以为 null/空（纯 tool call 的 assistant 消息）
+                            if (m.content.size > 0) {
+                                mObj.put("content", JsonString(m.content))
+                            }
+                            // 无文本内容则省略 content 字段
+                            let tcArr = JsonArray()
+                            for (j in 0..tcs.size) {
+                                let tc = tcs[j]
+                                let tcObj = JsonObject()
+                                tcObj.put("id", JsonString(tc.id))
+                                tcObj.put("type", JsonString("function"))
+                                let funcObj = JsonObject()
+                                funcObj.put("name", JsonString(tc.name))
+                                funcObj.put("arguments", JsonString(tc.arguments))
+                                tcObj.put("function", funcObj)
+                                tcArr.add(tcObj)
+                            }
+                            mObj.put("tool_calls", tcArr)
+                        case None =>
+                            mObj.put("content", JsonString(m.content))
+                    }
+                case _ =>
+                    mObj.put("content", JsonString(m.content))
+            }
             msgs.add(mObj)
         }
         obj.put("messages", msgs)

@@ -22,43 +22,6 @@ public struct Usage {
     public static func empty(): Usage { Usage(0, 0) }
 }
 
-// ── Tool Calling 类型 ──
-
-/// 工具定义（发给 LLM）
-/// parameters 是 JSON Schema 字符串（在 Provider 中序列化为 JSON Object）
-public struct ToolDefinition {
-    public let name: String
-    public let description: String
-    public let parameters: String  // JSON Schema 字符串
-
-    public init(name: String, description: String, parameters: String) {
-        this.name = name
-        this.description = description
-        this.parameters = parameters
-    }
-}
-
-/// LLM 返回的工具调用
-public struct ToolCall {
-    public let id: String
-    public let name: String
-    public let arguments: String  // JSON 字符串
-
-    public init(id: String, name: String, arguments: String) {
-        this.id = id
-        this.name = name
-        this.arguments = arguments
-    }
-}
-
-// ── Tool Choice ──
-
-public enum ToolChoice {
-    | Auto
-    | Required
-    | NoTool
-}
-
 // ── Response Format ──
 
 /// ResponseFormat — JSON Schema 存储为字符串（Provider 负责解析/注入）
@@ -121,6 +84,24 @@ public class ChatRequest {
         m.content = content
         messages.add(m)
     }
+
+    /// 添加 assistant 消息（含 text + tool_use 块），用于 multi-turn tool calling
+    public func addAssistantWithToolCalls(textContent: String, toolCalls: ArrayList<ToolCall>): Unit {
+        let m = Message()
+        m.role = MessageRole.Assistant
+        m.content = textContent
+        m.toolCalls = Some(toolCalls)
+        messages.add(m)
+    }
+
+    /// 添加 tool result 消息（含 tool_call_id），用于 multi-turn tool calling
+    public func addToolResultMessage(toolCallId: String, content: String): Unit {
+        let m = Message()
+        m.role = MessageRole.Tool
+        m.content = content
+        m.toolCallId = Some(toolCallId)
+        messages.add(m)
+    }
 }
 
 /// LLM 非流式响应
@@ -147,9 +128,9 @@ public struct ChatResponse {
 /// SSE 流中的单个事件
 public enum StreamEvent {
     | Chunk(String)         // 文本增量
-    | ToolCallStart(String) // 工具调用开始 (id)
-    | ToolCallDelta(String) // 工具调用参数增量 (JSON delta)
-    | ToolCallEnd(String, String)  // 工具调用完成 (id, name)
+    | ToolCallStart(String) // 工具调用开始 (tool_call_id)
+    | ToolCallDelta(String, String) // 工具调用参数增量 (tool_call_id, delta_json)
+    | ToolCallEnd(String, String, String)  // 工具调用完成 (tool_call_id, name, arguments_json)
     | Done(Usage)           // 流结束（含 token 用量）
     | Error(String)         // 流错误
 }

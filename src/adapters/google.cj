@@ -146,7 +146,7 @@ public class GoogleProvider {
         var toolCalls = ArrayList<ToolCall>()
         for (fi in 0..activeFnCalls.size) {
             let (fnId, fnName, accumulatedArgs) = activeFnCalls[fi]
-            onEvent(StreamEvent.ToolCallEnd(fnId, fnName))
+            onEvent(StreamEvent.ToolCallEnd(fnId, fnName, accumulatedArgs))
             toolCalls.add(ToolCall(fnId, fnName, accumulatedArgs))
         }
 
@@ -219,7 +219,7 @@ public class GoogleProvider {
                                                                                 let argsJson = argsJv.toJsonString()
                                                                                 let (aid, aname, prevJson) = activeFnCalls[slotIdx]
                                                                                 activeFnCalls[slotIdx] = (aid, aname, prevJson + argsJson)
-                                                                                onEvent(StreamEvent.ToolCallDelta(argsJson))
+                                                                                onEvent(StreamEvent.ToolCallDelta(aid, argsJson))
                                                                             case None => ()
                                                                         }
                                                                         match (fc.get("partialArgs")) {
@@ -231,7 +231,7 @@ public class GoogleProvider {
                                                                                             let entryJson = entryJv.toJsonString()
                                                                                             let (aid, aname, prevJson) = activeFnCalls[slotIdx]
                                                                                             activeFnCalls[slotIdx] = (aid, aname, prevJson + entryJson)
-                                                                                            onEvent(StreamEvent.ToolCallDelta(entryJson))
+                                                                                            onEvent(StreamEvent.ToolCallDelta(aid, entryJson))
                                                                                         case None => ()
                                                                                     }
                                                                                 }
