@@ -85,11 +85,14 @@ public class Cursor {
         if (r >= maxRow) { r = maxRow - 1 }
         if (c < 0) { c = 0 }
         if (c >= maxCol) { c = maxCol - 1 }
-        Cursor(r, c)
+        row = r
+        col = c
     }
 }
 
 // ── 终端缓冲区 ──
+
+let SCROLLBACK_MAX: Int64 = 10000  // scrollback 最大行数
 
 /// 虚拟终端缓冲区（包含活跃屏幕区域 + 滚动回视区）
 public class TerminalBuffer {
@@ -160,27 +163,39 @@ public class TerminalBuffer {
     /// 获取滚动回视区某行
     public func getScrollbackRow(idx: Int64): ArrayList<Cell> { scrollback[idx] }
 
-    /// 变更终端大小（保留内容，裁剪或新增空行）
+    /// 裁剪 scrollback 超出上限的部分
+    private func trimScrollback(): Unit {
+        while (scrollback.size > SCROLLBACK_MAX) {
+            scrollback.remove(at: 0)
+        }
+    }
+
+    /// 变更终端大小。
+    /// Resize 只改变 active viewport，不把窗口缩小时临时不可见的内容写入 scrollback。
+    /// 行宽只扩展不裁剪，避免缩窄后再放宽时丢失右侧已有 cell。
     public func resize(newRows: Int64, newCols: Int64): Unit {
-        // 裁剪/扩展列
+        let targetRows = if (newRows < 1) { 1 } else { newRows }
+        let targetCols = if (newCols < 1) { 1 } else { newCols }
+
+        // 扩展列，但不裁剪超过当前 viewport 的 cell。渲染层只读取 cols 范围。
         for (r in 0..grid.size) {
             let row = grid[r]
-            while (row.size < newCols) { row.add(Cell.empty()) }
-            while (row.size > newCols) { row.remove(at:row.size - 1) }
+            while (row.size < targetCols) { row.add(Cell.empty()) }
         }
-        // 裁剪/扩展行
-        while (grid.size < newRows) {
-            let row = ArrayList<Cell>(newCols)
-            for (c in 0..newCols) { row.add(Cell.empty()) }
+
+        while (grid.size < targetRows) {
+            let row = ArrayList<Cell>(targetCols)
+            for (c in 0..targetCols) { row.add(Cell.empty()) }
             grid.add(row)
         }
-        while (grid.size > newRows) {
-            let removed = grid[0]
+
+        // 缩高是 viewport 变化，不是程序输出滚动；不要把这些行塞进 scrollback。
+        while (grid.size > targetRows) {
             grid.remove(at:0)
-            scrollback.add(removed)
         }
-        this.rows = newRows
-        this.cols = newCols
+
+        this.rows = targetRows
+        this.cols = targetCols
         cursor.clamp(rows, cols)
     }
 
@@ -201,8 +216,10 @@ public class TerminalBuffer {
     /// 获取可见区域内容的纯文本表示（用于发送给 LLM）
     public func toPlainText(): String {
         var result = ""
-        for (r in 0..grid.size) {
-            for (c in 0..grid[r].size) {
+        let visibleRows = if (rows < grid.size) { rows } else { grid.size }
+        for (r in 0..visibleRows) {
+            let visibleCols = if (cols < grid[r].size) { cols } else { grid[r].size }
+            for (c in 0..visibleCols) {
                 let ch = grid[r][c].char
                 if (ch != r'\0') {
                     result += String(ch)
@@ -376,6 +393,7 @@ public class TerminalBuffer {
         let top = grid[0]
         scrollback.add(top)
         grid.remove(at:0)
+        trimScrollback()
 
         let newRow = ArrayList<Cell>(cols)
         for (c in 0..cols) { newRow.add(Cell.empty()) }

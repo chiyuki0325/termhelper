@@ -524,27 +524,45 @@ func handleErrorAction(state: TuiAppState, session: Session, action: Action): Un
 func handleResize(state: TuiAppState, width: Int64, height: Int64): Unit {
     state.terminalWidth = width
     state.terminalHeight = height
-    state.scrollOffset = 0
-    state.maxScrollOffset = 0
-    state.lastRenderedScrollOffset = -1
+    state.lastRenderedContent = ""  // 强制下一帧重渲染（buffer 尺寸变了）
 
-    // PTY 屏幕：更新 PTY 终端大小 + 重建虚拟终端缓冲区
     if (state.screen == "pty") {
-        // 左边框占 1 列，PTY 宽度缩 1 列，行数减去 overlay
-        let cols = if (width > 11) { width - 1 } else { 79 }
-        let rows = if (height > 5) { height - 5 } else { 20 }
+        syncPtyViewport(state, width, height)
+    }
+}
 
-        // 通知 agent 更新 PTY slave 窗口大小
-        match (state.ptyAgent) {
-            case Some(agent) => agent.requestResize(UInt16(cols), UInt16(rows))
-            case None => ()
-        }
+func syncPtyViewport(state: TuiAppState, width: Int64, height: Int64): Unit {
+    let (cols, rows) = computePtySize(width, height)
 
-        // 重建 TUI 侧虚拟终端缓冲区（新尺寸）
-        match (state.ptyTerminalBuf) {
-            case Some(buf) => buf.resize(rows, cols)
-            case None => state.ptyTerminalBuf = Some(TerminalBuffer(rows, cols))
-        }
+    match (state.ptyAgent) {
+        case Some(agent) => agent.requestResize(UInt16(cols), UInt16(rows))
+        case None => ()
+    }
+
+    match (state.ptyTerminalBuf) {
+        case Some(buf) =>
+            if (buf.rows != rows || buf.cols != cols) {
+                buf.resize(rows, cols)
+                state.lastRenderedContent = ""
+            }
+        case None => state.ptyTerminalBuf = Some(TerminalBuffer(rows, cols))
+    }
+}
+
+func computePtySize(width: Int64, height: Int64): (Int64, Int64) {
+    let cols = if (width > 2) { width - 1 } else { 1 }
+    let overlayRows = computePtyOverlayRows(height)
+    let rows = if (height > overlayRows + 2) { height - overlayRows - 2 } else { 1 }
+    (cols, rows)
+}
+
+func computePtyOverlayRows(height: Int64): Int64 {
+    if (height >= 8) {
+        5
+    } else if (height > 3) {
+        height - 3
+    } else {
+        0
     }
 }
 
@@ -589,9 +607,9 @@ func startPtyAgentic(state: TuiAppState, command: String, config: Config): Unit 
     let (cols, rows) = getHostTerminalSize()
     state.terminalWidth = Int64(cols)
     state.terminalHeight = Int64(rows)
-    let ptyRows: UInt16 = if (rows > 5) { rows - 5 } else { 20 }
-    // 左边框占 1 列，PTY 宽度需要缩 1 列避免被裁切
-    let ptyCols: UInt16 = if (cols > 2) { cols - 1 } else { 79 }
+    let (initialPtyCols, initialPtyRows) = computePtySize(Int64(cols), Int64(rows))
+    let ptyRows = UInt16(initialPtyRows)
+    let ptyCols = UInt16(initialPtyCols)
     debugTrace("startPtyAgentic: terminal_size=${rows}x${cols} pty_size=${ptyRows}x${ptyCols}")
     // 创建 TUI 侧虚拟终端缓冲区（用于 Cell→Span ANSI 渲染）
     state.ptyTerminalBuf = Some(TerminalBuffer(Int64(ptyRows), Int64(ptyCols)))
@@ -907,9 +925,11 @@ func showError(state: TuiAppState, message: String, retryable: Bool): Unit {
 }
 
 func updateScrollBounds(terminal: Int64, state: TuiAppState, content: String): Unit {
+    // PTY 屏幕由 handleResize 管理尺寸和 buffer，不在此处覆盖
+    if (state.screen == "pty") { return }
+
     let terminalHeight = Int64(getTerminalHeight(terminal))
     let terminalWidth = Int64(getTerminalWidth(terminal))
-    // 实时同步终端尺寸，确保 resize 事件遗漏时渲染仍正确
     state.terminalHeight = terminalHeight
     state.terminalWidth = terminalWidth
     state.viewportHeight = if (terminalHeight > 2) {
@@ -961,6 +981,15 @@ func render(terminal: Int64, state: TuiAppState): Unit {
     let spinnerFrame = state.tick / 4
     let content = buildScreenText(state, spinnerFrame)
     updateScrollBounds(terminal, state, content)
+    if (state.screen == "pty") {
+        let currentWidth = Int64(getTerminalWidth(terminal))
+        let currentHeight = Int64(getTerminalHeight(terminal))
+        if (currentWidth != state.terminalWidth || currentHeight != state.terminalHeight) {
+            state.terminalWidth = currentWidth
+            state.terminalHeight = currentHeight
+            syncPtyViewport(state, currentWidth, currentHeight)
+        }
+    }
     if (content == state.lastRenderedContent && spinnerFrame == state.lastSpinnerFrame && state.scrollOffset == state
         .lastRenderedScrollOffset) {
         return
@@ -1003,14 +1032,16 @@ func render(terminal: Int64, state: TuiAppState): Unit {
 
 /// PTY 多 widget 布局：顶部标题栏 + 中间终端内容 + 底部 overlay Block
 func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int64): Unit {
-    // 防御：初始帧 ratatui 可能尚未就绪返回 0，用安全下限
-    let termHeight = if (state.terminalHeight > 5) { state.terminalHeight } else { 24 }
-    let termWidth = if (state.terminalWidth > 10) { state.terminalWidth } else { 80 }
-    let overlayRows: Int64 = 5   // 底部 overlay 固定行数
-    let contentHeight: Int64 = if (termHeight > overlayRows + 2) {
-        termHeight - overlayRows - 2
-    } else {
-        10
+    let termWidth = if (state.terminalWidth > 1) { state.terminalWidth } else { 1 }
+    let widgetWidth = if (termWidth > 1) { termWidth - 1 } else { 1 }
+    let overlayRows = computePtyOverlayRows(state.terminalHeight)
+
+    // 内容高度直接取 buf.rows（唯一权威来源，不受 updateScrollBounds 干扰）
+    let contentH = match (state.ptyTerminalBuf) {
+        case Some(buf) => buf.rows
+        case None =>
+            let (_, rows) = computePtySize(state.terminalWidth, state.terminalHeight)
+            rows
     }
 
     // 1. 标题栏 (Block widget, 行 0)
@@ -1022,41 +1053,36 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
         case Err(_) => ()
     }
 
-    // 2. 终端内容区域 (StyledText, 行 1, 高度 = contentHeight)
-    // x=1 留出左边框空间，避免覆盖 Block widget 的左侧边界
+    // 2. 终端内容区域 (StyledText, 行 1, 高度 = buf.rows + 1)
+    // +1: 补偿 StyledText widget 初始化时自带的一个空行
     match (createRichTextWidget()) {
         case Ok(handle) =>
-            // 渲染终端 Cell 内容到此 widget
             fillPtyTerminalWidget(handle, state)
             let _ = setWidgetPosition(handle, 1, 1)
-            let _ = setWidgetSize(handle, UInt16(termWidth - 1), UInt16(contentHeight))
-            let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
+            let _ = setWidgetSize(handle, UInt16(widgetWidth), UInt16(contentH + 1))
             let _ = addWidgetToTerminal(terminal, handle)
             state.widgetHandle = Some(handle)
         case Err(_) => ()
     }
 
-    // 3. 底部 overlay 面板 (Block widget + StyledText 叠加, 行 = 1 + contentHeight)
-    let overlayY = 1 + contentHeight
-    match (createRichTextWidget()) {
-        case Ok(handle) =>
-            fillPtyOverlayWidget(handle, state)
-            let _ = setWidgetPosition(handle, 1, UInt16(overlayY))
-            let _ = setWidgetSize(handle, UInt16(termWidth - 1), UInt16(overlayRows))
-            let _ = addWidgetToTerminal(terminal, handle)
-        case Err(_) => ()
+    // 3. 底部 overlay 面板，紧贴内容区域下方（+1 补偿 widget 自带空行）
+    let overlayY = 1 + contentH + 1
+    if (overlayRows > 0 && overlayY < state.terminalHeight) {
+        match (createRichTextWidget()) {
+            case Ok(handle) =>
+                fillPtyOverlayWidget(handle, state)
+                let _ = setWidgetPosition(handle, 1, UInt16(overlayY))
+                let _ = setWidgetSize(handle, UInt16(widgetWidth), UInt16(overlayRows))
+                let _ = addWidgetToTerminal(terminal, handle)
+            case Err(_) => ()
+        }
     }
 }
 
-/// 将终端 Cell 内容填充到 widget（仅终端输出，不含 overlay）
+/// 将终端 Cell 内容填充到 widget（整个 grid，无滚动）
 func fillPtyTerminalWidget(handle: Int64, state: TuiAppState): Unit {
     match (state.ptyTerminalBuf) {
-        case Some(buf) =>
-            let overlayRows: Int64 = 5
-            let titleRows: Int64 = 2
-            let vr = state.terminalHeight - overlayRows - titleRows
-            let visibleRows = if (vr > 4) { vr } else { 4 }
-            renderTerminalCells(handle, buf, state.scrollOffset, state.maxScrollOffset, visibleRows)
+        case Some(buf) => renderFullTerminalGrid(handle, buf)
         case None => richTextLine(handle, "  " + uiText("pty_waiting_output"), styleMuted())
     }
 }

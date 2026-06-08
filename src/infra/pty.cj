@@ -12,8 +12,8 @@ import std.collection.*
 
 let TIOCGPTN: Int64 = 0x80045430    // _IOR('T', 0x30, int) — 获取 pty 编号
 let TIOCSPTLCK: Int64 = 0x40045431 // _IOW('T', 0x31, int) — 设置/清除 pty 锁
-let TIOCSWINSZ: Int64 = 0x40085434 // _IOW('T', 0x34, winsize) — 设置终端窗口大小
-let TIOCGWINSZ: Int64 = 0x80085435 // _IOR('T', 0x35, winsize) — 获取终端窗口大小
+let TIOCSWINSZ: Int64 = 0x5414 // 设置终端窗口大小 (asm-generic/ioctls.h)
+let TIOCGWINSZ: Int64 = 0x5413 // 获取终端窗口大小 (asm-generic/ioctls.h)
 
 // ── fcntl 常量 ──
 

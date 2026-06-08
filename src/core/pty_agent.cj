@@ -683,13 +683,17 @@ public class PtyAgentLoop {
         }
         match (size) {
             case Some((cols, rows)) =>
-                ptyDebugLog("resize: ${rows}x${cols}")
                 match (pty) {
                     case Some(p) => p.resize(rows, cols)
                     case None => ()
                 }
                 match (terminalBuf) {
-                    case Some(buf) => buf.resize(Int64(rows), Int64(cols))
+                    case Some(buf) =>
+                        let beforeRows = buf.rows
+                        let beforeCols = buf.cols
+                        let beforeSb = buf.scrollbackSize()
+                        buf.resize(Int64(rows), Int64(cols))
+                        ptyDebugLog("resize: ${rows}x${cols} buf_before=${beforeRows}x${beforeCols} sb=${beforeSb} buf_after=${buf.rows}x${buf.cols} sb=${buf.scrollbackSize()}")
                     case None => ()
                 }
             case None => ()

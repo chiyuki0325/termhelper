@@ -48,11 +48,10 @@ public func styledPtyAgentic(
     richTextLine(handle, command, styleCommand())
     richTextLine(handle)
 
-    // 终端输出区域 — Cell→Span ANSI 渲染
+    // 终端输出区域 — Cell→Span ANSI 渲染（无滚动）
     richTextLine(handle, uiText("pty_section_terminal"), styleSection())
     match (terminalBuf) {
-        case Some(buf) =>
-            renderTerminalCells(handle, buf, scrollOffset, maxScroll, 12)
+        case Some(buf) => renderFullTerminalGrid(handle, buf)
         case None =>
             richTextLine(handle, "  " + uiText("pty_waiting_output"), styleMuted())
     }
@@ -106,33 +105,22 @@ public func styledPtyAgentic(
     richTextSpan(handle, keys, styleMuted())
 }
 
-// ── Cell→Span 渲染 ──
+// ── Cell→Span 渲染（无滚动，直接渲染整个 grid）──
 
-/// 从 TerminalBuffer 的 Cell 网格渲染可见行，每个 Cell → ratatui Span
-public func renderTerminalCells(handle: Int64, buf: TerminalBuffer, scrollOffset: Int64, maxScroll: Int64, visibleRows: Int64): Unit {
-    let totalRows = buf.rows
-    let startRow = if (scrollOffset > 0) { scrollOffset } else { 0 }
-    let endRow = ptyMin(startRow + visibleRows, totalRows)
-
-    if (startRow > 0) {
-        richTextLine(handle, "  ... (${startRow} rows above) ...", styleMuted())
-    }
-
-    for (r in startRow..endRow) {
+/// 将 TerminalBuffer 的整个 grid 渲染为 ratatui styled spans（无滚动，无 scrollback）
+public func renderFullTerminalGrid(handle: Int64, buf: TerminalBuffer): Unit {
+    for (r in 0..buf.rows) {
         let row = buf.getRow(r)
-        renderCellRow(handle, row)
+        renderCellRow(handle, row, buf.cols)
         richTextLine(handle)
-    }
-
-    if (endRow < totalRows) {
-        richTextLine(handle, "  ... (${totalRows - endRow} rows below) ...", styleMuted())
     }
 }
 
 /// 将一行 Cell 渲染为 ratatui styled spans
 /// 优化：相同样式的连续 Cell 合并为一个 span，减少 FFI 调用
-func renderCellRow(handle: Int64, row: ArrayList<Cell>): Unit {
-    if (row.size == 0) { return }
+func renderCellRow(handle: Int64, row: ArrayList<Cell>, cols: Int64): Unit {
+    let visibleCols = if (cols < row.size) { cols } else { row.size }
+    if (visibleCols <= 0) { return }
 
     richTextSpan(handle, "  ", styleDefault())
 
@@ -140,7 +128,7 @@ func renderCellRow(handle: Int64, row: ArrayList<Cell>): Unit {
     var currentStyle = cellToStyle(row[0])
     var currentText = ""
 
-    for (c in 0..row.size) {
+    for (c in 0..visibleCols) {
         let cell = row[c]
         let style = cellToStyle(cell)
         let ch = cellChar(cell)
