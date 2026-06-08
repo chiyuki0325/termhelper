@@ -530,8 +530,9 @@ func handleResize(state: TuiAppState, width: Int64, height: Int64): Unit {
 
     // PTY 屏幕：更新 PTY 终端大小 + 重建虚拟终端缓冲区
     if (state.screen == "pty") {
-        let cols = if (width > 10) { width } else { 80 }
-        let rows = if (height > 5) { height - 5 } else { 20 }  // 减去 overlay 行数
+        // 左边框占 1 列，PTY 宽度缩 1 列，行数减去 overlay
+        let cols = if (width > 11) { width - 1 } else { 79 }
+        let rows = if (height > 5) { height - 5 } else { 20 }
 
         // 通知 agent 更新 PTY slave 窗口大小
         match (state.ptyAgent) {
@@ -584,13 +585,16 @@ func startPtyAgentic(state: TuiAppState, command: String, config: Config): Unit 
     state.maxScrollOffset = 0
     switchScreen(state, "pty")
 
-    // 获取真实终端大小（来自 infra 层）
+    // 获取真实终端大小（来自 infra 层），减去 overlay 区域行数
     let (cols, rows) = getHostTerminalSize()
     state.terminalWidth = Int64(cols)
     state.terminalHeight = Int64(rows)
-    debugTrace("startPtyAgentic: terminal_size=${rows}x${cols}")
+    let ptyRows: UInt16 = if (rows > 5) { rows - 5 } else { 20 }
+    // 左边框占 1 列，PTY 宽度需要缩 1 列避免被裁切
+    let ptyCols: UInt16 = if (cols > 2) { cols - 1 } else { 79 }
+    debugTrace("startPtyAgentic: terminal_size=${rows}x${cols} pty_size=${ptyRows}x${ptyCols}")
     // 创建 TUI 侧虚拟终端缓冲区（用于 Cell→Span ANSI 渲染）
-    state.ptyTerminalBuf = Some(TerminalBuffer(Int64(rows), Int64(cols)))
+    state.ptyTerminalBuf = Some(TerminalBuffer(Int64(ptyRows), Int64(ptyCols)))
 
     // 在后台启动 PtyAgentLoop
     let queue = state.queue
@@ -603,7 +607,7 @@ func startPtyAgentic(state: TuiAppState, command: String, config: Config): Unit 
             let agent = PtyAgentLoop({e: AppEvent => queue.push(e)}, provider, config, ctx)
             state.ptyAgent = Some(agent)
             debugTrace("startPtyAgentic: running agent for command=${ptyCmd}")
-            let result = agent.run(ptyCmd, rows, cols)
+            let result = agent.run(ptyCmd, ptyRows, ptyCols)
             debugTrace("startPtyAgentic: agent finished exitCode=${result.exitCode}")
             state.ptyOutput = result.output
             let finalOverlay = PtyOverlayData()
@@ -904,6 +908,10 @@ func showError(state: TuiAppState, message: String, retryable: Bool): Unit {
 
 func updateScrollBounds(terminal: Int64, state: TuiAppState, content: String): Unit {
     let terminalHeight = Int64(getTerminalHeight(terminal))
+    let terminalWidth = Int64(getTerminalWidth(terminal))
+    // 实时同步终端尺寸，确保 resize 事件遗漏时渲染仍正确
+    state.terminalHeight = terminalHeight
+    state.terminalWidth = terminalWidth
     state.viewportHeight = if (terminalHeight > 2) {
         terminalHeight - 1
     } else {
@@ -995,8 +1003,9 @@ func render(terminal: Int64, state: TuiAppState): Unit {
 
 /// PTY 多 widget 布局：顶部标题栏 + 中间终端内容 + 底部 overlay Block
 func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int64): Unit {
-    let termHeight = state.terminalHeight
-    let termWidth = state.terminalWidth
+    // 防御：初始帧 ratatui 可能尚未就绪返回 0，用安全下限
+    let termHeight = if (state.terminalHeight > 5) { state.terminalHeight } else { 24 }
+    let termWidth = if (state.terminalWidth > 10) { state.terminalWidth } else { 80 }
     let overlayRows: Int64 = 5   // 底部 overlay 固定行数
     let contentHeight: Int64 = if (termHeight > overlayRows + 2) {
         termHeight - overlayRows - 2
@@ -1014,12 +1023,13 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
     }
 
     // 2. 终端内容区域 (StyledText, 行 1, 高度 = contentHeight)
+    // x=1 留出左边框空间，避免覆盖 Block widget 的左侧边界
     match (createRichTextWidget()) {
         case Ok(handle) =>
             // 渲染终端 Cell 内容到此 widget
             fillPtyTerminalWidget(handle, state)
-            let _ = setWidgetPosition(handle, 0, 1)
-            let _ = setWidgetSize(handle, UInt16(termWidth), UInt16(contentHeight))
+            let _ = setWidgetPosition(handle, 1, 1)
+            let _ = setWidgetSize(handle, UInt16(termWidth - 1), UInt16(contentHeight))
             let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
             let _ = addWidgetToTerminal(terminal, handle)
             state.widgetHandle = Some(handle)
@@ -1031,8 +1041,8 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
     match (createRichTextWidget()) {
         case Ok(handle) =>
             fillPtyOverlayWidget(handle, state)
-            let _ = setWidgetPosition(handle, 0, UInt16(overlayY))
-            let _ = setWidgetSize(handle, UInt16(termWidth), UInt16(overlayRows))
+            let _ = setWidgetPosition(handle, 1, UInt16(overlayY))
+            let _ = setWidgetSize(handle, UInt16(termWidth - 1), UInt16(overlayRows))
             let _ = addWidgetToTerminal(terminal, handle)
         case Err(_) => ()
     }

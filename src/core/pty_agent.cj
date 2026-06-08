@@ -229,6 +229,7 @@ public class PtyAgentLoop {
             if (shouldThrottle()) {
                 loopState = PtyLoopState.Throttled(minIntervalMs)
                 onEvent(AppEvent.PtyStateChange(loopState))
+                pushOverlayUpdate()
                 sleepMs(200)
                 continue
             }
@@ -342,17 +343,17 @@ public class PtyAgentLoop {
         let now = monotonicMs()
 
         if (lastLlmCallTime > 0 && now - lastLlmCallTime < minIntervalMs) {
-            return true
-        }
-
-        if (lastLlmCallTime > 0) {
+            // 在最小间隔内，如果输出增长足够，允许提前触发 LLM
             match (terminalBuf) {
                 case Some(buf) =>
-                    let currentSize = buf.toPlainText().size
-                    if (currentSize - lastOutputSize < minBytesThreshold) { return true }
+                    if (buf.toPlainText().size - lastOutputSize >= minBytesThreshold) {
+                        return false
+                    }
                 case None => ()
             }
+            return true
         }
+        // 超过最小间隔，始终放行（即使没有新输出）
         false
     }
 
@@ -507,7 +508,15 @@ public class PtyAgentLoop {
         let clamped = if (ms < 500) { 500 } else if (ms > 30000) { 30000 } else { ms }
         loopState = PtyLoopState.Throttled(clamped)
         onEvent(AppEvent.PtyStateChange(loopState))
-        sleepMs(clamped)
+        // 分段 sleep，每 200ms 处理一次 resize
+        var remaining = clamped
+        while (remaining > 0) {
+            let chunk = if (remaining > 200) { 200 } else { remaining }
+            sleepMs(chunk)
+            remaining -= chunk
+            processResize()
+            if (checkInterrupt()) { return }
+        }
         decisionHistory.add(makeMessage(MessageRole.Tool,
             "{\"result\":\"waited ${clamped}ms\"}"))
     }
@@ -518,6 +527,9 @@ public class PtyAgentLoop {
         var got = false
         var result = ""
         while (!got) {
+            // 等待用户输入的同时也处理 resize 请求
+            processResize()
+
             synchronized(mtx) {
                 if (interruptRequested) {
                     interruptRequested = false
