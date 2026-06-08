@@ -80,7 +80,7 @@ class TuiAppState {
     var ptyInput: String
     var ptySensitiveInput: Bool
     var ptyAgent: ?PtyAgentLoop
-    var ptyTerminalBuf: ?TerminalBuffer  // TUI 侧虚拟终端缓冲区（ANSI Cell→Span 渲染用）
+    var ptyRawBytes: ArrayList<UInt8>  // 累积的 PTY 原始字节（供 Rust FFI ANSI 解析用）
 
     init(query: String) {
         this.queue = AppEventQueue()
@@ -122,7 +122,7 @@ class TuiAppState {
         this.ptyInput = ""
         this.ptySensitiveInput = false
         this.ptyAgent = None
-        this.ptyTerminalBuf = None
+        this.ptyRawBytes = ArrayList<UInt8>()
     }
 }
 
@@ -269,15 +269,14 @@ func handleAppEvent(state: TuiAppState, session: Session, event: AppEvent): Unit
         }
         case AppEvent.LLMError(message) => showError(state, message, true)
         case AppEvent.PtyScreenUpdate(text) =>
-            match (state.ptyTerminalBuf) {
-                case Some(buf) => buf.processString(text)
-                case None => ()
+            // 累积原始字节（完整保留，滚动支持）
+            for (b in text.toArray()) { state.ptyRawBytes.add(b) }
+            // 模拟终端自动滚动：在底部 20% 区域时，新内容自动拉到底
+            if (state.screen == "pty" && (state.maxScrollOffset <= 0 || state.scrollOffset >= state.maxScrollOffset * 80 / 100)) {
+                state.scrollOffset = 9223372036854775807  // Int64 max, updateScrollBounds 会 clamp 到新 maxScrollOffset
             }
-            // 同时保留纯文本用于降级渲染
-            match (state.ptyTerminalBuf) {
-                case Some(buf) => state.ptyOutput = buf.toPlainText()
-                case None => state.ptyOutput = text
-            }
+            // 保留纯文本用于降级渲染
+            state.ptyOutput = text
         case AppEvent.PtyStateChange(loopState) =>
             handlePtyStateChange(state, loopState)
         case AppEvent.PtyOverlayUpdate(data) =>
@@ -539,14 +538,8 @@ func syncPtyViewport(state: TuiAppState, width: Int64, height: Int64): Unit {
         case None => ()
     }
 
-    match (state.ptyTerminalBuf) {
-        case Some(buf) =>
-            if (buf.rows != rows || buf.cols != cols) {
-                buf.resize(rows, cols)
-                state.lastRenderedContent = ""
-            }
-        case None => state.ptyTerminalBuf = Some(TerminalBuffer(rows, cols))
-    }
+    // PTY agent 已经在后台处理 resize，这里只需要失效渲染缓存
+    state.lastRenderedContent = ""
 }
 
 func computePtySize(width: Int64, height: Int64): (Int64, Int64) {
@@ -556,14 +549,23 @@ func computePtySize(width: Int64, height: Int64): (Int64, Int64) {
     (cols, rows)
 }
 
-func computePtyOverlayRows(height: Int64): Int64 {
-    if (height >= 8) {
+/// 根据终端高度和 PTY 状态动态计算 overlay 面板行数
+func computePtyOverlayRows(height: Int64, ptyState: String): Int64 {
+    let base = if (height >= 12) {
+        6
+    } else if (height >= 8) {
         5
     } else if (height > 3) {
         height - 3
     } else {
         0
     }
+    // awaiting_input 需要额外行显示输入提示和输入框
+    if (ptyState == "awaiting_input") { base + 3 } else { base }
+}
+
+func computePtyOverlayRows(height: Int64): Int64 {
+    computePtyOverlayRows(height, "")
 }
 
 // ── PTY Agentic（阶段 6）──
@@ -611,8 +613,6 @@ func startPtyAgentic(state: TuiAppState, command: String, config: Config): Unit 
     let ptyRows = UInt16(initialPtyRows)
     let ptyCols = UInt16(initialPtyCols)
     debugTrace("startPtyAgentic: terminal_size=${rows}x${cols} pty_size=${ptyRows}x${ptyCols}")
-    // 创建 TUI 侧虚拟终端缓冲区（用于 Cell→Span ANSI 渲染）
-    state.ptyTerminalBuf = Some(TerminalBuffer(Int64(ptyRows), Int64(ptyCols)))
 
     // 在后台启动 PtyAgentLoop
     let queue = state.queue
@@ -925,9 +925,6 @@ func showError(state: TuiAppState, message: String, retryable: Bool): Unit {
 }
 
 func updateScrollBounds(terminal: Int64, state: TuiAppState, content: String): Unit {
-    // PTY 屏幕由 handleResize 管理尺寸和 buffer，不在此处覆盖
-    if (state.screen == "pty") { return }
-
     let terminalHeight = Int64(getTerminalHeight(terminal))
     let terminalWidth = Int64(getTerminalWidth(terminal))
     state.terminalHeight = terminalHeight
@@ -938,9 +935,20 @@ func updateScrollBounds(terminal: Int64, state: TuiAppState, content: String): U
         20
     }
 
-    let lineCount = countLines(content)
-    state.maxScrollOffset = if (lineCount > state.viewportHeight) {
-        lineCount - state.viewportHeight
+    // PTY 模式：基于原始字节中的行数估算滚动上限，使用实际内容区域高度
+    let effectiveViewport = if (state.screen == "pty") {
+        let (_, rows) = computePtySize(terminalWidth, terminalHeight)
+        rows
+    } else {
+        state.viewportHeight
+    }
+    let lineCount = if (state.screen == "pty") {
+        countLinesFromBytes(state.ptyRawBytes)
+    } else {
+        countLines(content)
+    }
+    state.maxScrollOffset = if (lineCount > effectiveViewport) {
+        lineCount - effectiveViewport
     } else {
         0
     }
@@ -960,6 +968,20 @@ func countLines(content: String): Int64 {
 
     var count: Int64 = 1
     for (b in content) {
+        if (b == b'\n') {
+            count += 1
+        }
+    }
+    count
+}
+
+/// 从原始字节估算行数（用于 PTY 滚动上限）
+func countLinesFromBytes(bytes: ArrayList<UInt8>): Int64 {
+    if (bytes.size == 0) {
+        return 0
+    }
+    var count: Int64 = 1
+    for (b in bytes) {
         if (b == b'\n') {
             count += 1
         }
@@ -1030,19 +1052,16 @@ func render(terminal: Int64, state: TuiAppState): Unit {
     let _ = drawTerminal(terminal)
 }
 
-/// PTY 多 widget 布局：顶部标题栏 + 中间终端内容 + 底部 overlay Block
+/// PTY 多 widget 布局：顶部标题栏 + 中间终端内容(AnsiText) + 底部 overlay Block
 func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int64): Unit {
+    let _ = spinnerFrame
     let termWidth = if (state.terminalWidth > 1) { state.terminalWidth } else { 1 }
     let widgetWidth = if (termWidth > 1) { termWidth - 1 } else { 1 }
-    let overlayRows = computePtyOverlayRows(state.terminalHeight)
+    let overlayRows = computePtyOverlayRows(state.terminalHeight, state.ptyState)
 
-    // 内容高度直接取 buf.rows（唯一权威来源，不受 updateScrollBounds 干扰）
-    let contentH = match (state.ptyTerminalBuf) {
-        case Some(buf) => buf.rows
-        case None =>
-            let (_, rows) = computePtySize(state.terminalWidth, state.terminalHeight)
-            rows
-    }
+    // 内容高度取自 PTY 尺寸
+    let (_, rows) = computePtySize(state.terminalWidth, state.terminalHeight)
+    let contentH = rows
 
     // 1. 标题栏 (Block widget, 行 0)
     match (createBlockWidget(screenTitle(state))) {
@@ -1053,20 +1072,22 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
         case Err(_) => ()
     }
 
-    // 2. 终端内容区域 (StyledText, 行 1, 高度 = buf.rows + 1)
-    // +1: 补偿 StyledText widget 初始化时自带的一个空行
-    match (createRichTextWidget()) {
-        case Ok(handle) =>
-            fillPtyTerminalWidget(handle, state)
-            let _ = setWidgetPosition(handle, 1, 1)
-            let _ = setWidgetSize(handle, UInt16(widgetWidth), UInt16(contentH + 1))
-            let _ = addWidgetToTerminal(terminal, handle)
-            state.widgetHandle = Some(handle)
-        case Err(_) => ()
+    // 2. 终端内容区域 (AnsiText, 行 1)
+    let rawBytes = state.ptyRawBytes.toArray()
+    if (rawBytes.size > 0) {
+        match (createAnsiTextWidget(rawBytes)) {
+            case Ok(handle) =>
+                let _ = setWidgetPosition(handle, 1, 1)
+                let _ = setWidgetSize(handle, UInt16(widgetWidth), UInt16(contentH))
+                let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
+                let _ = addWidgetToTerminal(terminal, handle)
+                state.widgetHandle = Some(handle)
+            case Err(_) => ()
+        }
     }
 
-    // 3. 底部 overlay 面板，紧贴内容区域下方（+1 补偿 widget 自带空行）
-    let overlayY = 1 + contentH + 1
+    // 3. 底部 overlay 面板
+    let overlayY = 1 + contentH
     if (overlayRows > 0 && overlayY < state.terminalHeight) {
         match (createRichTextWidget()) {
             case Ok(handle) =>
@@ -1076,14 +1097,6 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
                 let _ = addWidgetToTerminal(terminal, handle)
             case Err(_) => ()
         }
-    }
-}
-
-/// 将终端 Cell 内容填充到 widget（整个 grid，无滚动）
-func fillPtyTerminalWidget(handle: Int64, state: TuiAppState): Unit {
-    match (state.ptyTerminalBuf) {
-        case Some(buf) => renderFullTerminalGrid(handle, buf)
-        case None => richTextLine(handle, "  " + uiText("pty_waiting_output"), styleMuted())
     }
 }
 
@@ -1130,7 +1143,21 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
         richTextSpan(handle, "  [Enter]${uiText("pty_continue")} ", styleSuccess())
         richTextSpan(handle, "[I]${uiText("pty_interrupt")} ", styleErrorText())
         richTextSpan(handle, "[M]${uiText("pty_manual")}", styleInfo())
+    } else if (ptyState == "awaiting_input") {
+        richTextLine(handle)
+        let label = if (state.ptySensitiveInput) { uiText("pty_sensitive_input") } else { uiText("pty_input_prompt") }
+        richTextSpan(handle, "  " + label, styleInfo())
+        let displayInput = if (state.ptySensitiveInput) { ptyMaskedInput(state.ptyInput) } else { state.ptyInput }
+        richTextLine(handle, "  " + displayInput, styleInput())
+        richTextSpan(handle, "  [Enter]${uiText("pty_confirm_write")} ", styleSuccess())
+        richTextSpan(handle, "[Esc]${uiText("pty_deny")}", styleErrorText())
     }
+}
+
+private func ptyMaskedInput(current: String): String {
+    var out = ""
+    for (_ in current.runes()) { out += "*" }
+    out
 }
 
 func ptyStatusText(ptyState: String): String {
@@ -1172,8 +1199,9 @@ func buildStyledScreen(handle: Int64, state: TuiAppState, spinnerFrame: Int64): 
             state.executeResult)
         case "prompt" => styledPrompt(handle, state)
         case "error" => styledError(handle, state.errorMessage, state.retryable)
-        case "pty" => styledPtyAgentic(handle, state.ptyCommand, state.ptyTerminalBuf, state.ptyOverlay,
-            state.ptyState, state.scrollOffset, state.maxScrollOffset,
+        case "pty" => styledPtyAgentic(handle, state.ptyCommand, state.ptyRawBytes,
+            state.ptyOverlay, state.ptyState,
+            state.scrollOffset, state.maxScrollOffset,
             state.ptyInput, state.ptySensitiveInput)
         case _ => richTextLine(handle, uiText("app_title"), styleTitle())
     }

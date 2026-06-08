@@ -120,7 +120,7 @@ func ptyToolDefinitions(): ArrayList<ToolDefinition> {
 public class PtyAgentLoop {
     // ── PTY 状态 ──
     private var pty: ?Pty
-    private var terminalBuf: ?TerminalBuffer
+    private var textBuf: ?PtyTextBuffer
     private var command: String
 
     // ── 循环状态 ──
@@ -161,7 +161,7 @@ public class PtyAgentLoop {
 
     public init(onEvent: (AppEvent) -> Unit, provider: LLMProvider, config: Config, context: EnvironmentContext) {
         this.pty = None
-        this.terminalBuf = None
+        this.textBuf = None
         this.command = ""
         this.roundCount = 0
         this.maxRounds = config.execution.ptyMaxRounds
@@ -243,7 +243,7 @@ public class PtyAgentLoop {
                 return result
         }
         let p = pty.getOrThrow()
-        this.terminalBuf = Some(TerminalBuffer(Int64(terminalRows), Int64(terminalCols)))
+        this.textBuf = Some(PtyTextBuffer())
 
         // 2. Spawn 交互式命令
         ptyDebugLog("spawning child: ${command}")
@@ -296,7 +296,7 @@ public class PtyAgentLoop {
                 loopState = PtyLoopState.Throttled(minIntervalMs)
                 onEvent(AppEvent.PtyStateChange(loopState))
                 pushOverlayUpdate()
-                let bufSize = match (terminalBuf) { case Some(b) => b.toPlainText().size; case None => 0 }
+                let bufSize = match (textBuf) { case Some(b) => b.size(); case None => 0 }
                 ptyDebugLog("throttled: round=${roundCount} bufsize=${bufSize}")
                 sleepMs(200)
                 continue
@@ -304,7 +304,7 @@ public class PtyAgentLoop {
 
             loopState = PtyLoopState.LLMDecision
             onEvent(AppEvent.PtyStateChange(loopState))
-            let bufSize2 = match (terminalBuf) { case Some(b) => b.toPlainText().size; case None => 0 }
+            let bufSize2 = match (textBuf) { case Some(b) => b.size(); case None => 0 }
             ptyDebugLog("→ LLM round ${roundCount + 1} bufsize=${bufSize2}")
 
             match (callLlmForDecision()) {
@@ -361,9 +361,9 @@ public class PtyAgentLoop {
         // 检测密码回显模式（在发送给 LLM 之前脱敏）
         detectPasswordEcho(data)
 
-        // 再更新本地 TerminalBuffer（供 LLM 上下文 + 节流用）
-        match (terminalBuf) {
-            case Some(buf) => buf.processString(data)
+        // 再更新本地文本缓冲区（供 LLM 上下文 + 节流用）
+        match (textBuf) {
+            case Some(buf) => buf.append(data)
             case None => ()
         }
         true
@@ -420,9 +420,9 @@ public class PtyAgentLoop {
 
         if (lastLlmCallTime > 0 && now - lastLlmCallTime < minIntervalMs) {
             // 在最小间隔内，如果输出增长足够，允许提前触发 LLM
-            match (terminalBuf) {
+            match (textBuf) {
                 case Some(buf) =>
-                    if (buf.toPlainText().size - lastOutputSize >= minBytesThreshold) {
+                    if (buf.size() - lastOutputSize >= minBytesThreshold) {
                         return false
                     }
                 case None => ()
@@ -446,7 +446,7 @@ public class PtyAgentLoop {
 
         for (msg in decisionHistory) { req.messages.add(msg) }
 
-        let currentOutput = match (terminalBuf) {
+        let currentOutput = match (textBuf) {
             case Some(buf) => redactSensitive(buf.toPlainText())
             case None => ""
         }
@@ -463,8 +463,8 @@ public class PtyAgentLoop {
         outputTokens = resp.usage.outputTokens
 
         lastLlmCallTime = now
-        match (terminalBuf) {
-            case Some(buf) => lastOutputSize = buf.toPlainText().size
+        match (textBuf) {
+            case Some(buf) => lastOutputSize = buf.size()
             case None => ()
         }
         roundCount += 1
@@ -516,7 +516,7 @@ public class PtyAgentLoop {
     private func collectResult(p: Pty): PtyResult {
         let result = PtyResult()
         result.exitCode = p.getExitCode()
-        match (terminalBuf) {
+        match (textBuf) {
             case Some(buf) => result.output = buf.toPlainText()
             case None => result.output = ""
         }
@@ -687,13 +687,9 @@ public class PtyAgentLoop {
                     case Some(p) => p.resize(rows, cols)
                     case None => ()
                 }
-                match (terminalBuf) {
+                match (textBuf) {
                     case Some(buf) =>
-                        let beforeRows = buf.rows
-                        let beforeCols = buf.cols
-                        let beforeSb = buf.scrollbackSize()
-                        buf.resize(Int64(rows), Int64(cols))
-                        ptyDebugLog("resize: ${rows}x${cols} buf_before=${beforeRows}x${beforeCols} sb=${beforeSb} buf_after=${buf.rows}x${buf.cols} sb=${buf.scrollbackSize()}")
+                        ptyDebugLog("resize: ${rows}x${cols} buf_size=${buf.size()}")
                     case None => ()
                 }
             case None => ()

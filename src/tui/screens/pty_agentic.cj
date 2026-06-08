@@ -2,7 +2,6 @@ package termhelper.tui.screens
 
 import ratatui.core.*
 import termhelper.types.*
-import termhelper.infra.*
 import termhelper.i18n.*
 import termhelper.tui.components.*
 import std.collection.*
@@ -17,11 +16,13 @@ let PTY_COLOR_DEFAULT: Int32 = 0
 let PTY_MOD_BOLD: Int32 = 1
 let PTY_MOD_UNDERLINED: Int32 = 8
 
-/// styled 版 PTY agentic 屏渲染（从 TerminalBuffer 的 Cell 网格渲染）
+/// styled 版 PTY agentic 屏渲染（用于降级/纯文本场景）
+/// 注意：AnsiText widget 模式下，终端输出由 rendering 层独立处理，
+/// 此函数只渲染 overlay + 交互控制。
 public func styledPtyAgentic(
     handle: Int64,
     command: String,
-    terminalBuf: ?TerminalBuffer,
+    rawBytes: ArrayList<UInt8>,
     overlay: PtyOverlayData,
     ptyState: String,
     scrollOffset: Int64,
@@ -48,13 +49,7 @@ public func styledPtyAgentic(
     richTextLine(handle, command, styleCommand())
     richTextLine(handle)
 
-    // 终端输出区域 — Cell→Span ANSI 渲染（无滚动）
-    richTextLine(handle, uiText("pty_section_terminal"), styleSection())
-    match (terminalBuf) {
-        case Some(buf) => renderFullTerminalGrid(handle, buf)
-        case None =>
-            richTextLine(handle, "  " + uiText("pty_waiting_output"), styleMuted())
-    }
+    // 终端输出区域 — 由外部 AnsiText widget 渲染
 
     // 分隔线 + 浮层面板
     richTextLine(handle)
@@ -105,108 +100,8 @@ public func styledPtyAgentic(
     richTextSpan(handle, keys, styleMuted())
 }
 
-// ── Cell→Span 渲染（无滚动，直接渲染整个 grid）──
-
-/// 将 TerminalBuffer 的整个 grid 渲染为 ratatui styled spans（无滚动，无 scrollback）
-public func renderFullTerminalGrid(handle: Int64, buf: TerminalBuffer): Unit {
-    for (r in 0..buf.rows) {
-        let row = buf.getRow(r)
-        renderCellRow(handle, row, buf.cols)
-        richTextLine(handle)
-    }
-}
-
-/// 将一行 Cell 渲染为 ratatui styled spans
-/// 优化：相同样式的连续 Cell 合并为一个 span，减少 FFI 调用
-func renderCellRow(handle: Int64, row: ArrayList<Cell>, cols: Int64): Unit {
-    let visibleCols = if (cols < row.size) { cols } else { row.size }
-    if (visibleCols <= 0) { return }
-
-    richTextSpan(handle, "  ", styleDefault())
-
-    var runStart: Int64 = 0
-    var currentStyle = cellToStyle(row[0])
-    var currentText = ""
-
-    for (c in 0..visibleCols) {
-        let cell = row[c]
-        let style = cellToStyle(cell)
-        let ch = cellChar(cell)
-
-        if (!stylesEqual(style, currentStyle)) {
-            // 输出当前 run
-            richTextSpan(handle, currentText, currentStyle)
-            currentText = ch
-            currentStyle = style
-        } else {
-            currentText += ch
-        }
-    }
-
-    // 输出最后一个 run
-    if (currentText.size > 0) {
-        richTextSpan(handle, currentText, currentStyle)
-    }
-}
-
-/// Cell 字符 → 可打印字符串
-/// Rune(0) = 双宽字符占位符，返回空串（不额外占列）
-func cellChar(cell: Cell): String {
-    if (cell.char == Rune(0)) {
-        ""   // 双宽字符占位符，不渲染
-    } else if (cell.char < r' ') {
-        " "  // 控制字符显示为空格
-    } else {
-        String(cell.char)
-    }
-}
-
-/// Cell 属性 → RichStyle
-func cellToStyle(cell: Cell): RichStyle {
-    let fg = ansiColorToRata(cell.fg, false)
-    let bg = ansiColorToRata(cell.bg, true)
-    var mods: Int32 = 0
-    if (cell.attrs.bold) { mods += PTY_MOD_BOLD }
-    if (cell.attrs.underline) { mods += PTY_MOD_UNDERLINED }
-    // 反色：交换前景色和背景色
-    if (cell.attrs.reverse) {
-        RichStyle(bgColor(cell.bg), bgColor(cell.fg), mods)
-    } else {
-        RichStyle(fg, bg, mods)
-    }
-}
-
-/// ANSI 调色板索引 → ratatui 颜色码
-func ansiColorToRata(color: AnsiColor, isBg: Bool): Int32 {
-    if (!isBg && color.idx == -1) { return PTY_COLOR_DEFAULT }
-    if (isBg && color.idx == -1) { return PTY_COLOR_DEFAULT }
-    if (color.idx == -2) { return PTY_COLOR_DEFAULT } // 24-bit 暂不支持
-
-    let idx = color.idx
-    if (color.isBright) {
-        // Bright (8-15) → ratatui 亮色
-        let brightIdx: Int32 = Int32(idx) + 8
-        if (isBg) { return brightIdx + 1 }
-        return brightIdx
-    }
-
-    // 标准 ANSI palette (0-7)
-    let baseColor: Int32 = if (idx >= 0 && idx <= 7) { Int32(idx) } else { PTY_COLOR_DEFAULT }
-    if (isBg) { return baseColor + 1 }
-    baseColor
-}
-
-func bgColor(color: AnsiColor): Int32 {
-    if (color.idx == -1) { return PTY_COLOR_DEFAULT }
-    ansiColorToRata(color, true)
-}
-
-func stylesEqual(a: RichStyle, b: RichStyle): Bool {
-    a.fg == b.fg && a.bg == b.bg && a.modifiers == b.modifiers
-}
-
 // ═══════════════════════════════════════════════════════════════
-// 降级渲染（纯文本 / 无 TerminalBuffer 时使用）
+// 降级渲染（纯文本）
 // ═══════════════════════════════════════════════════════════════
 
 /// 纯文本版 PTY agentic 屏渲染（降级兼容）
