@@ -7,6 +7,8 @@ import termhelper.i18n.*
 import termhelper.util.*
 import std.collection.*
 import std.sync.*
+import std.fs.*
+import std.env.*
 
 // ═══════════════════════════════════════════════════════════════
 // PTY Agentic 循环 — 阶段 6 核心模块
@@ -30,6 +32,52 @@ let CLOCK_MONOTONIC: Int32 = 1
 
 foreign func clock_gettime(clk_id: Int32, tp: CPointer<Timespec>): Int32
 foreign func usleep(usec: UInt64): Int32
+
+// ── PTY Debug Log ──
+// TERMHELPER_PTY_DEBUG=1 启用，写入 /tmp/termhelper_pty_debug.log
+// 监控: tail -f /tmp/termhelper_pty_debug.log
+
+let PTY_DBG_LOG: String = "/tmp/termhelper_pty_debug.log"
+var ptyDbgFile: ?File = None
+
+func ptyDebugEnabled(): Bool { match (ptyDbgFile) { case Some(_) => true; case None => false } }
+
+func ptyDebugInit(): Unit {
+    match (getVariable("TERMHELPER_PTY_DEBUG")) {
+        case Some(v) => if (v != "1") { return }
+        case None => return
+    }
+    try {
+        let f = File(Path(PTY_DBG_LOG), Write)
+        ptyDbgFile = Some(f)
+        let msg = "[pty_debug] log opened\n"
+        f.write(msg.toArray())
+        f.flush()
+    } catch (_: Exception) {
+        ()
+    }
+}
+
+func ptyDebugLog(msg: String): Unit {
+    match (ptyDbgFile) {
+        case Some(f) =>
+            let ts = monotonicMs()
+            let line = "[${ts}] ${msg}\n"
+            f.write(line.toArray())
+            f.flush()
+        case None => ()
+    }
+}
+
+func ptyDebugClose(): Unit {
+    match (ptyDbgFile) {
+        case Some(f) =>
+            ptyDebugLog("log closing")
+            f.close()
+            ptyDbgFile = None
+        case None => ()
+    }
+}
 
 // ── 工具定义：PtyTool → ToolDefinition ──
 
@@ -170,10 +218,19 @@ public class PtyAgentLoop {
         this.totalOutputTokens = 0
         this.decisionHistory.clear()
 
+        // 初始化 debug FIFO
+        ptyDebugInit()
+        ptyDebugLog("=== PTY agentic start ===")
+        ptyDebugLog("command: ${command}")
+        ptyDebugLog("terminal size: ${terminalRows}x${terminalCols}")
+
         // 1. 创建 PTY 和虚拟终端缓冲区
         match (Pty.create(terminalRows, terminalCols)) {
-            case Some(p) => this.pty = Some(p)
+            case Some(p) =>
+                this.pty = Some(p)
+                ptyDebugLog("PTY created ok, slave=${p.slavePath}")
             case None =>
+                ptyDebugLog("PTY create FAILED")
                 let result = PtyResult()
                 result.exitCode = -1
                 result.summary = uiText("pty_create_failed")
@@ -184,7 +241,9 @@ public class PtyAgentLoop {
         this.terminalBuf = Some(TerminalBuffer(Int64(terminalRows), Int64(terminalCols)))
 
         // 2. Spawn 交互式命令
+        ptyDebugLog("spawning child: ${command}")
         if (!p.spawnChild(command)) {
+            ptyDebugLog("spawn FAILED")
             let result = PtyResult()
             result.exitCode = -1
             result.summary = uiText("pty_spawn_failed")
@@ -215,11 +274,13 @@ public class PtyAgentLoop {
             let hasOutput = readAndProcessOutput(p)
 
             if (exited && !hasOutput) {
+                ptyDebugLog("child exited, round=${roundCount}, exitCode=${p.getExitCode()}")
                 if (roundCount > 0) {
                     result = runFinalLlmRound(p)
                 } else {
                     result = collectResult(p)
                 }
+                ptyDebugLog("loop finished: exitCode=${result.exitCode} summary=${result.summary}")
                 loopState = PtyLoopState.Finished(result)
                 onEvent(AppEvent.PtyStateChange(loopState))
                 running = false
@@ -230,16 +291,22 @@ public class PtyAgentLoop {
                 loopState = PtyLoopState.Throttled(minIntervalMs)
                 onEvent(AppEvent.PtyStateChange(loopState))
                 pushOverlayUpdate()
+                let bufSize = match (terminalBuf) { case Some(b) => b.toPlainText().size; case None => 0 }
+                ptyDebugLog("throttled: round=${roundCount} bufsize=${bufSize}")
                 sleepMs(200)
                 continue
             }
 
             loopState = PtyLoopState.LLMDecision
             onEvent(AppEvent.PtyStateChange(loopState))
+            let bufSize2 = match (terminalBuf) { case Some(b) => b.toPlainText().size; case None => 0 }
+            ptyDebugLog("→ LLM round ${roundCount + 1} bufsize=${bufSize2}")
 
             match (callLlmForDecision()) {
                 case Some(tool) =>
+                    ptyDebugLog("← LLM tool: ${toolToolName(tool)} input=${totalInputTokens} output=${totalOutputTokens}")
                     if (!executeTool(p, tool)) {
+                        ptyDebugLog("executeTool returned false, ending loop")
                         running = false
                         result = collectResult(p)
                         loopState = PtyLoopState.Finished(result)
@@ -270,6 +337,8 @@ public class PtyAgentLoop {
         }
 
         p.close()
+        ptyDebugLog("=== PTY agentic end: exitCode=${result.exitCode} rounds=${roundCount} tokens=${totalInputTokens}+${totalOutputTokens} ===")
+        ptyDebugClose()
         result
     }
 
@@ -278,6 +347,8 @@ public class PtyAgentLoop {
     private func readAndProcessOutput(p: Pty): Bool {
         let data = p.tryRead(65536)
         if (data.size == 0) { return false }
+
+        ptyDebugLog("read output: ${data.size} bytes")
 
         // 先发送原始输出给 TUI（含 ANSI 转义序列，供 Cell→Span 渲染）
         onEvent(AppEvent.PtyScreenUpdate(data))
@@ -400,7 +471,11 @@ public class PtyAgentLoop {
                     "{\"tool\":\"${tc.name}\",\"arguments\":${tc.arguments}}")
                 decisionHistory.add(assistantMsg)
                 tool
-            case None => None
+            case None =>
+                let text = resp.content
+                let short = if (text.size > 500) { text[0..500] + "..." } else { text }
+                ptyDebugLog("← LLM text(${text.size}b) finish=${resp.finishReason}: ${short}")
+                None
         }
     }
 
@@ -453,6 +528,8 @@ public class PtyAgentLoop {
     }
 
     private func executeWrite(p: Pty, content: String, reason: String): Bool {
+        let modeStr = match (mode) { case PtyMode.FullAuto => "FullAuto"; case PtyMode.Confirm => "Confirm" }
+        ptyDebugLog("WRITE mode=${modeStr} reason=${reason} len=${content.size}")
         pushOverlayUpdateWithWrite(content, reason)
 
         match (mode) {
@@ -486,6 +563,7 @@ public class PtyAgentLoop {
     }
 
     private func executeAskUser(question: String, sensitive: Bool): Bool {
+        ptyDebugLog("ASK_USER question=${question} sensitive=${sensitive}")
         loopState = PtyLoopState.AwaitingUserInput(question, sensitive)
         onEvent(AppEvent.PtyStateChange(loopState))
         pushOverlayUpdateWithAskUser(question, sensitive)
@@ -548,6 +626,8 @@ public class PtyAgentLoop {
             }
             if (!got) { sleepMs(50) }
         }
+        let actionStr = if (result.startsWith("user_input:")) { "user_input(len=${result.size})" } else { result }
+        ptyDebugLog("user_action: ${actionStr}")
         result
     }
 
@@ -559,6 +639,7 @@ public class PtyAgentLoop {
                 interrupted = true
             }
         }
+        if (interrupted) { ptyDebugLog("INTERRUPT requested") }
         interrupted
     }
 
@@ -581,6 +662,7 @@ public class PtyAgentLoop {
         }
         match (size) {
             case Some((cols, rows)) =>
+                ptyDebugLog("resize: ${rows}x${cols}")
                 match (pty) {
                     case Some(p) => p.resize(rows, cols)
                     case None => ()
@@ -698,6 +780,17 @@ func parsePtyTool(name: String, argsJson: String): ?PtyTool {
         Some(PtyTool.Interrupt(extractJsonString(argsJson, "reason")))
     } else {
         None
+    }
+}
+
+/// 返回 PtyTool 的可读名称（debug 用）
+func toolToolName(tool: PtyTool): String {
+    match (tool) {
+        case PtyTool.Write(_, _) => "Write"
+        case PtyTool.AskUser(_, _) => "AskUser"
+        case PtyTool.Wait(_) => "Wait"
+        case PtyTool.Exit(_) => "Exit"
+        case PtyTool.Interrupt(_) => "Interrupt"
     }
 }
 
