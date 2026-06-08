@@ -551,7 +551,9 @@ func computePtySize(width: Int64, height: Int64): (Int64, Int64) {
 
 /// 根据终端高度和 PTY 状态动态计算 overlay 面板行数
 func computePtyOverlayRows(height: Int64, ptyState: String): Int64 {
-    let base = if (height >= 12) {
+    let base = if (height >= 20) {
+        7
+    } else if (height >= 12) {
         6
     } else if (height >= 8) {
         5
@@ -560,7 +562,7 @@ func computePtyOverlayRows(height: Int64, ptyState: String): Int64 {
     } else {
         0
     }
-    // awaiting_input 需要额外行显示输入提示和输入框
+    // awaiting_input 需要额外行（输入提示 + 输入框 + 按钮 = 3 行）
     if (ptyState == "awaiting_input") { base + 3 } else { base }
 }
 
@@ -1057,11 +1059,11 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
     let _ = spinnerFrame
     let termWidth = if (state.terminalWidth > 1) { state.terminalWidth } else { 1 }
     let widgetWidth = if (termWidth > 1) { termWidth - 1 } else { 1 }
-    let overlayRows = computePtyOverlayRows(state.terminalHeight, state.ptyState)
 
-    // 内容高度取自 PTY 尺寸
-    let (_, rows) = computePtySize(state.terminalWidth, state.terminalHeight)
-    let contentH = rows
+    // 先算 overlay 高度（状态感知），剩下的全给终端内容
+    let overlayRows = computePtyOverlayRows(state.terminalHeight, state.ptyState)
+    let titleRows: Int64 = 1
+    let contentH = if (state.terminalHeight > titleRows + overlayRows) { state.terminalHeight - titleRows - overlayRows } else { 1 }
 
     // 1. 标题栏 (Block widget, 行 0)
     match (createBlockWidget(screenTitle(state))) {
@@ -1144,11 +1146,20 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
         richTextSpan(handle, "[I]${uiText("pty_interrupt")} ", styleErrorText())
         richTextSpan(handle, "[M]${uiText("pty_manual")}", styleInfo())
     } else if (ptyState == "awaiting_input") {
-        richTextLine(handle)
+        // 显示 LLM 的问题（自动换行）
+        match (data.pendingWrite) {
+            case Some(question) =>
+                richTextSpan(handle, "  " + uiText("overlay_decision") + ": ", styleMuted())
+                richTextLine(handle, question, styleInfo())
+            case None => ()
+        }
+        // 输入提示
         let label = if (state.ptySensitiveInput) { uiText("pty_sensitive_input") } else { uiText("pty_input_prompt") }
         richTextSpan(handle, "  " + label, styleInfo())
+        // 输入框
         let displayInput = if (state.ptySensitiveInput) { ptyMaskedInput(state.ptyInput) } else { state.ptyInput }
-        richTextLine(handle, "  " + displayInput, styleInput())
+        richTextLine(handle, "  " + displayInput + "_", styleInput())
+        // 按钮
         richTextSpan(handle, "  [Enter]${uiText("pty_confirm_write")} ", styleSuccess())
         richTextSpan(handle, "[Esc]${uiText("pty_deny")}", styleErrorText())
     }
