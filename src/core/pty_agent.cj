@@ -487,7 +487,7 @@ public class PtyAgentLoop {
             case None =>
                 lastToolCall = None
                 let text = resp.content
-                let short = if (text.size > 500) { text[0..500] + "..." } else { text }
+                let short = truncateRunes(text, 500)
                 ptyDebugLog("← LLM text(${text.size}b) finish=${resp.finishReason}: ${short}")
                 None
         }

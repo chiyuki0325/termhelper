@@ -1090,7 +1090,7 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
     match (data.pendingWrite) {
         case Some(content) =>
             richTextSpan(handle, "  ${uiText("overlay_pending_write")}: ", styleMuted())
-            let short = if (content.size > 60) { content[0..60] + "..." } else { content }
+            let short = truncateRunes(content, 60)
             richTextLine(handle, short, styleCommand())
         case None => ()
     }

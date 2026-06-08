@@ -89,6 +89,23 @@ public func strFind(haystack: String, needle: String): Int64 {
     -1
 }
 
+/// 按 rune 数安全截断字符串（保证 UTF-8 完整性）
+/// maxRunes 为最大字符数（不含后缀 "...")
+public func truncateRunes(text: String, maxRunes: Int64): String {
+    if (maxRunes <= 0) { return "" }
+    var count: Int64 = 0
+    var result = StringBuilder()
+    for (r in text.runes()) {
+        if (count >= maxRunes) {
+            result.append("...")
+            return result.toString()
+        }
+        result.append(String(r))
+        count += 1
+    }
+    result.toString()
+}
+
 // ── 读取 fd 全部内容 ──
 
 public func fdReadAll(fd: Int32): String {
