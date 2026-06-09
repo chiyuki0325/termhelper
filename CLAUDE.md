@@ -31,7 +31,6 @@ cjpm build                          # 编译（输出到 target/release/bin/term
 cjpm build --verbose                # 查看完整编译命令
 ./target/release/bin/termhelper "查询内容"       # 构建后运行
 ./target/release/bin/termhelper --help          # 查看帮助
-./target/release/bin/termhelper --tui-demo      # 彩色样式预览
 ./target/release/bin/termhelper --debug "查询"  # CLI 调试模式，打印 LLMResponse JSON
 ```
 
@@ -153,47 +152,74 @@ Session.start(query)
 
 ```
 src/
-├── main.cj                    # 入口：参数解析、配置加载、TUI 启动
-├── types/
-│   ├── llm.cj                 # LLMResponse, CommandData, InvestigateData, SafetyLevel
-│   ├── session.cj             # Message, MessageRole, EnvironmentContext
-│   └── pty.cj                 # PtyTool, PtyLoopState, PtyResult, AppEvent, CommandResult
-├── tui/
-│   ├── tui.cj                 # TUI 初始化、主循环、Screen 路由、Channel 接收、渲染
-│   ├── input.cj               # 键盘事件 → Action 转换（含鼠标滚轮）
-│   ├── theme.cj               # 颜色常量定义
-│   ├── screens/               # 各屏幕的渲染函数（纯文本 + ratatui styled 各一套）
-│   └── components/            # 可复用组件（spinner、option_menu、text_input 等）
-├── core/
-│   ├── session.cj             # Session：对话历史管理、LLM 交互编排（仅主线程）
-│   ├── context.cj             # ContextManager：环境上下文持久化（JSON + flock 排他锁）
-│   ├── request.cj             # RequestBuilder：构造 LLM 请求
-│   ├── safety_fallback.cj     # LLM 未标记危险时的本地兜底检查
-│   └── retry.cj               # LLM 重试策略（指数退避 + HTTP 状态码分类）
-├── adapters/
-│   ├── provider.cj            # LLMProvider 多态分派 + ChatRequest/ChatResponse/StreamEvent
-│   ├── openai_compat.cj       # OpenAI 协议兼容实现
-│   ├── anthropic.cj           # Anthropic 协议实现
-│   ├── google.cj              # Google 协议实现
-│   ├── sse.cj                 # SSE 协议解析器
-│   └── structured_output.cj   # 各 Provider 的 Structured Output 适配封装
-├── infra/
-│   ├── pty.cj                 # PTY 基础设施：openpt/fork/exec/master fd 读写
-│   ├── spawn.cj               # 普通子进程 spawn（stdout/stderr 捕获 + 超时 + 可中断）
-│   ├── config.cj              # 配置加载（env → JSON → 自动创建）
-│   ├── clipboard.cj           # 剪贴板（OSC 52 → wl-copy → xclip → 降级展示）
-│   ├── shell_rc.cj            # Shell RC 管理（install/uninstall，注释标记包围）
-│   ├── fs.cj                  # 文件工具（JSON 读写 + flock LOCK_EX + 原子写入）
-│   ├── migration.cj           # ContextMigration：逐版本数据迁移
-│   ├── paths.cj               # 路径常量（~/.config/termhelper/）
-│   ├── util.cj                # 调试跟踪、环境变量获取
-│   └── terminal_buffer.cj     # 虚拟终端缓冲区（ANSI 解析 + 单元格渲染）
-├── util/
-│   ├── prompt.cj              # System prompt 模板（json_schema 模式 / json_object 模式 / PTY agent）
-│   └── json_schema.cj         # LLM 响应的 JSON Schema 定义（用于 Structured Output）
+├── main.cj                          # 入口：参数解析、配置加载、TUI/调试/安装卸载分发
+├── types/                           # 零依赖数据模型
+│   ├── llm.cj                       # LLMResponse, CommandData, InvestigateData, SafetyLevel
+│   ├── session.cj                   # Message, MessageRole, EnvironmentContext
+│   └── pty.cj                       # PtyTool, PtyLoopState, PtyResult, AppEvent, CommandResult
+├── core/                            # 业务编排层
+│   ├── session.cj                   # Session：对话历史、LLM 交互、FactEdits 合并
+│   ├── request.cj                   # RequestBuilder：system prompt + context + history + JSON Schema
+│   ├── context.cj                   # ContextManager：环境上下文持久化和迁移入口
+│   ├── pty_agent.cj                 # PTY agentic 循环：PTY + LLM tool-calling + 用户确认
+│   ├── safety_fallback.cj           # 本地安全兜底检查
+│   └── retry.cj                     # LLM 重试策略和错误分类
+├── adapters/                        # LLM Provider 适配层
+│   ├── provider.cj                  # Provider 抽象、ChatRequest/ChatResponse、tool-calling 类型
+│   ├── openai_compat.cj             # OpenAI 兼容接口
+│   ├── anthropic.cj                 # Anthropic Messages API
+│   ├── google.cj                    # Google Gemini API
+│   ├── structured_output.cj         # Provider-specific structured output 参数构造
+│   ├── sse.cj                       # SSE 流解析器
+│   └── util.cj                      # Provider/SSE 共用 JSON 工具函数
+├── infra/                           # OS 和持久化基础设施
+│   ├── config.cj                    # 配置加载、环境变量覆盖、默认配置落盘
+│   ├── paths.cj                     # 配置和上下文路径
+│   ├── fs.cj                        # 文件读写、flock 排他锁、原子写入
+│   ├── file_permissions.cj          # 敏感文件 chmod 0600
+│   ├── migration.cj                 # context.json 版本迁移
+│   ├── spawn.cj                     # 普通子进程执行、输出捕获、超时和中断
+│   ├── pty.cj                       # PTY 创建、窗口大小、master fd 读写、子进程控制
+│   ├── pty_text_buffer.cj           # PTY 输出纯文本归一化、LLM 上下文 compact/delta
+│   ├── terminal_buffer.cj           # 虚拟终端缓冲区和 ANSI 解析
+│   ├── clipboard.cj                 # 剪贴板：OSC 52 → wl-copy → xclip → 降级展示
+│   ├── shell_rc.cj                  # Shell RC install/uninstall，marker 包围
+│   └── util.cj                      # debug trace、环境变量、进程/信号工具
+├── tui/                             # 终端 UI 层
+│   ├── tui.cj                       # TUI 初始化、主循环、Screen 路由、Channel 接收
+│   ├── input.cj                     # 键盘/鼠标事件 → Action
+│   ├── signal.cj                    # self-pipe 信号通知辅助
+│   ├── theme.cj                     # 颜色和样式常量
+│   ├── screens/
+│   │   ├── loading.cj               # Loading 屏
+│   │   ├── result.cj                # 命令结果屏
+│   │   ├── execute.cj               # 普通 spawn 执行屏
+│   │   ├── pty_agentic.cj           # PTY agentic 执行屏
+│   │   ├── prompt.cj                # investigate/clarify/modify 输入屏
+│   │   └── error.cj                 # 错误屏
+│   └── components/
+│       ├── layout.cj                # 通用布局辅助
+│       ├── command_display.cj       # 命令展示
+│       ├── explanation.cj           # 命令分解说明
+│       ├── safety_badge.cj          # 安全等级展示
+│       ├── option_menu.cj           # 选项菜单
+│       ├── overlay_panel.cj         # PTY overlay 面板
+│       ├── spinner.cj               # 加载动画
+│       ├── styled_text.cj           # 富文本样式辅助
+│       └── text_input.cj            # 文本输入/敏感输入
+├── util/                            # Prompt 和 schema 工具
+│   ├── prompt.cj                    # 主流程、json_object、PTY agent prompt
+│   └── json_schema.cj               # LLMResponse JSON Schema
 ├── i18n/
-│   └── i18n.cj                # 国际化：根据 LANG/LC_ALL 自动切换中英文
-└── tests/                     # 验证测试（FFI PTY、HTTP、并发、信号）
+│   └── i18n.cj                      # LANG/LC_ALL 语言检测和中英文 UI/prompt 文案
+└── tests/                           # 验证测试程序包
+    ├── pkg.cj
+    ├── concurrency_verify/main.cj
+    ├── ffi_pty_verify/main.cj
+    ├── http_verify/main.cj
+    ├── pty_context_verify/main.cj
+    ├── pty_integration/main.cj
+    └── signal_verify/main.cj
 ```
 
 ## 编码约定与注意事项
@@ -201,7 +227,7 @@ src/
 ### 仓颉语言关键规则
 
 - **`std.core` 自动导入**，无需显式 import。`String`、`Array`、`Option`、`Rune` 等均可直接用
-- **`String.fromUtf8(Array<UInt8>)`** — 正确的 UTF-8 字节数组 → 字符串转换方式。**禁止** `String(Rune(Int32(byte)))` 逐字节转换（会破坏多字节 UTF-8 序列导致乱码）
+- **`safeUtf8(Array<UInt8>)`** — PTY/终端输出进入 LLM 文本上下文时使用的容错 UTF-8 转换。已确认完整 UTF-8 的普通文件/HTTP/JSON 字节数组仍可使用 `String.fromUtf8(Array<UInt8>)`
 - **`@JsonAdapter`** 宏来自 `naivejson`，为类/枚举自动生成 `serialize()`/`deserialize()`/`toJsonSchema()`
 - **`@C` 结构体** 用于 FFI 场景，如 `Winsize` 用于 `ioctl(TIOCSWINSZ)`
 - **`StringBuilder`** 用于高效拼接字符串，避免大量 `+` 产生中间字符串
@@ -209,21 +235,21 @@ src/
 - **`Attribute` 用 `var` 不用 `let`**：`class` 的字段必须用 `var` 声明（即使只在构造后赋值）
 - **`spawn {}`** 创建新线程，返回 `Future<T>`。用于后台 LLM 调用、子进程执行
 
-### 字符串与 UTF-8
+### 字符串与 safeUtf8
 
-**这是最近修复的关键 bug。** 项目中从命令输出读取原始字节后，必须使用 `String.fromUtf8(Array<UInt8>)` 进行批量 UTF-8 解码：
+项目中禁止用 `String(Rune(Int32(byte)))` 逐字节拼接字符串；这种写法会破坏多字节 UTF-8 序列，导致中文和其他非 ASCII 输出乱码。
+
+当前 PTY LLM 文本上下文使用 `src/infra/pty_text_buffer.cj` 中的 `safeUtf8(bytes)` 做容错转换。它会保留合法 UTF-8 序列，并用替换符处理截断或非法字节，适合处理 PTY tail、delta、ANSI 剥离后的片段等不保证边界完整的终端输出：
 
 ```cangjie
-// ✅ 正确做法（src/infra/spawn.cj 中的 ptrToUtf8 函数）
-let arr = Array<UInt8>(n, repeat: 0)
-for (i in 0..n) { arr[i] = ptr.read(i) }
-String.fromUtf8(arr)
+// ✅ PTY/LLM 文本上下文：容错处理不完整或非法 UTF-8
+safeUtf8(bytesRange(bytes, start, end).toArray())
 
-// ❌ 错误做法——会导致非 ASCII 字符乱码
+// ❌ 错误做法：逐字节转 Rune 会破坏多字节 UTF-8
 String(Rune(Int32(byte)))
 ```
 
-涉及文件：`src/infra/spawn.cj`（`ptrToUtf8` 辅助函数 + 4 处调用点）、`src/infra/pty.cj`（`tryRead` 方法）。
+已确认完整的 UTF-8 字节数组仍使用 `String.fromUtf8(Array<UInt8>)`，例如配置/RC 文件、SSE 行缓冲、JSON 字符串拼装等。命令 stdout/stderr 和 PTY 读取仍需注意 chunk 边界；如要把片段送入 LLM 上下文，优先经过 `PtyLlmContextBuffer` / `safeUtf8`。
 
 ### JSON 序列化
 
@@ -253,17 +279,6 @@ String(Rune(Int32(byte)))
 
 `src/infra/util.cj` 提供 `debugTrace(msg)` 和 `enableDebugTrace()`。CLI 调试模式（`--debug`）会将完整 LLMResponse JSON 打印到 stdout。
 
-## 待实现的功能（根据架构文档）
-
-架构文档（`docs/architecture-final.md`）中规划但尚未完整实现的功能：
-
-- **PTY Agentic 全屏渲染** — 虚拟终端 ANSI 解析 + ratatui overlay 面板（当前 execute 屏仅简单 spawn）
-- **信号处理** — SIGWINCH 终端大小变化、SIGINT/SIGTERM 优雅退出、panic hook
-- **`--install` / `--uninstall`** — Shell 集成安装/卸载（当前为占位实现）
-- **流式 LLM 文本展示** — Loading 屏实时展示 LLM 生成内容（当前 Loading 屏为基本实现）
-- **PTY 敏感输入处理** — `AskUser(sensitive=true)` 的密码遮罩和脱敏
-- **Structured Output 降级链** — `json_schema` → `json_object` + prompt 的自动降级（已有框架但可能未完整测试）
-
 ## 第三方依赖
 
 | 依赖 | 路径 | 说明 |
@@ -273,17 +288,50 @@ String(Rune(Int32(byte)))
 
 `references/` 目录包含参考实现（claude-code SDK 源码、musl libc PTY 实现、ratatui/naivejson 的本地备份）。
 
-## Git 提交格式
+### ratatui SDK 注意事项
 
-项目使用中文提交信息，格式为 `type: description`：
-- `feat:` — 新功能
-- `fix:` — 修复
-- `refactor:` — 重构
-- `improvement:` — 改进/优化
-- `docs:` — 文档
-- `chore:` — 杂务
+`thirdparty/ratatui/` 中的 Cangjie ratatui SDK 是 `gitcode.com/Cangjie-SIG/ratatui` 的 hard fork。原始 SDK 质量低劣，包含大量 stub 代码，容易导致功能静默失败。
 
-提交末尾加 `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`。
+开发时应将该 SDK 视为不可靠依赖：遇到 TUI 行为异常、FFI 返回成功但无实际渲染、事件/样式/布局接口无效等情况，不要默认业务代码有错，应主动检查并修改 `thirdparty/ratatui/`，补完 termhelper 所需功能。
+
+## Bundled Skills 使用说明
+
+本项目在 `.claude/skills/` 中绑定了仓颉语言相关 skills，Codex/Claude Code 等编码代理开发本项目时应优先使用这些资料，而不是凭经验猜测仓颉 API：
+
+- `cangjie-lang-features` — 仓颉语言核心特性
+- `cangjie-std` — 标准库常用功能速查
+- `cangjie-stdx` — 扩展标准库功能速查（JSON、HTTP、日志、压缩、TLS 等）
+- `cangjie-toolchains` — `cjc` / `cjpm` / `cjfmt` / `cjlint` 等工具链
+- `cangjie-regulations` — 仓颉项目规范和最佳实践
+- `cangjie-original-docs` — 原始文档兜底
+
+实现新功能时，优先级应为：
+
+1. 仓颉标准库 `std`。
+2. 仓颉扩展标准库 `stdx`。
+3. 项目已有 helper / infra 封装。
+4. 第三方依赖（如 `naivejson`、`ratatui`）。
+5. FFI。
+
+不要第一反应写 FFI。只有在 `std` / `stdx` / 现有封装无法满足需求，或确实需要 POSIX/终端/PTY/底层系统能力时，才新增 FFI。新增 FFI 时必须集中声明、使用 `unsafe {}` 包裹调用、处理资源释放，并优先参考本项目已有 `infra/pty.cj`、`infra/spawn.cj`、`infra/file_permissions.cj` 的写法。
+
+## Git Commit Format
+
+Use English commit messages in the format `type: description`:
+- `feat:` — new features
+- `fix:` — bug fixes
+- `refactor:` — refactoring
+- `improvement:` — improvements
+- `docs:` — documentation
+- `chore:` — maintenance
+
+**注意**: 对于 Claude Code，每个 commit message 末尾必须包含 `Co-Authored-By` trailer。模型名称需要参考运行环境提示中的 `You are powered by the model <实际的模型名称>`，不应该无脑认为自己是 `Claude Opus 4.8`。
+
+对于 Codex，每个 commit message 末尾也必须包含 `Co-Authored-By` trailer，使用当前 Codex 模型身份。例如本项目当前约定为：
+
+```text
+Co-Authored-By: GPT-5.5 <codex@openai.com>
+```
 
 ## Memory 文件
 
