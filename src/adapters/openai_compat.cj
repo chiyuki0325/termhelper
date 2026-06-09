@@ -238,6 +238,10 @@ public class OpenAICompatProvider {
                                             contentDelta += content
                                             onEvent(StreamEvent.Chunk(content))
                                         }
+                                        let reasoning = extractOpenAIReasoningDelta(d)
+                                        if (reasoning.size > 0) {
+                                            onEvent(StreamEvent.ReasoningChunk(reasoning))
+                                        }
                                         match (d.get("tool_calls")) {
                                             case Some(tcJv) =>
                                                 let tcArr = tcJv.asArray()
@@ -296,6 +300,15 @@ public class OpenAICompatProvider {
             }
             (contentDelta, finishReason, usage)
         } catch (_: Exception) { ("", "", Usage.empty()) }
+    }
+
+    private func extractOpenAIReasoningDelta(delta: JsonObject): String {
+        let keys = ["reasoning_content", "reasoning", "thinking"]
+        for (key in keys) {
+            let value = jsonGetString(delta, key, "")
+            if (value.size > 0) { return value }
+        }
+        ""
     }
 
     private func buildRequestBody(req: ChatRequest, stream: Bool): String {

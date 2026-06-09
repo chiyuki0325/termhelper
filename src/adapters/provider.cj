@@ -127,7 +127,8 @@ public struct ChatResponse {
 
 /// SSE 流中的单个事件
 public enum StreamEvent {
-    | Chunk(String)         // 文本增量
+    | Chunk(String)         // final answer/content delta; do not display on loading screen
+    | ReasoningChunk(String) // reasoning/thinking delta for loading screen
     | ToolCallStart(String) // 工具调用开始 (tool_call_id)
     | ToolCallDelta(String, String) // 工具调用参数增量 (tool_call_id, delta_json)
     | ToolCallEnd(String, String, String)  // 工具调用完成 (tool_call_id, name, arguments_json)

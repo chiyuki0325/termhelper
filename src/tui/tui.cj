@@ -1262,11 +1262,9 @@ func styledLoading(handle: Int64, query: String, frame: Int64, streamedText: Str
         styledSection(handle, uiText("section_retry"))
         styledWrapped(handle, "  " + retryText, UI_WIDTH - 2, "  ", styleWarning())
     }
-    richTextLine(handle)
-    styledSection(handle, uiText("section_model_response"))
-    if (streamedText.size == 0) {
-        richTextLine(handle, "  " + uiText("waiting_model"), styleMuted())
-    } else {
+    if (streamedText.size > 0) {
+        richTextLine(handle)
+        styledSection(handle, uiText("section_model_response"))
         styledWrapped(handle, streamedText, UI_WIDTH, "", styleDefault())
     }
     styledKeys(handle, uiText("keys_exit"))

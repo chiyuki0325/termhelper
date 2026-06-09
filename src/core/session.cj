@@ -146,14 +146,14 @@ public class Session {
         parsed
     }
 
-    /// 流式 LLM 调用：通过 chatStream 接收增量文本，转发给 onChunk 回调
+    /// 流式 LLM 调用：只把 reasoning/thinking 增量转发给 Loading 屏。
     private func runLlmStream(query: String, onChunk: (String) -> Unit): LLMResponse {
         debugTrace("Session.runLlmStream: building request")
         let req = requestBuilder.build(query, history, context, config)
         debugTrace("Session.runLlmStream: calling provider.chatStream")
         let chatResp = provider.chatStream(req, { event: StreamEvent =>
             match (event) {
-                case StreamEvent.Chunk(text) => onChunk(text)
+                case StreamEvent.ReasoningChunk(text) => onChunk(text)
                 case _ => ()
             }
         })

@@ -189,7 +189,11 @@ public class GoogleProvider {
                                                             // Text
                                                             let partText = jsonGetString(part, "text", "")
                                                             if (partText.size > 0) {
-                                                                textDelta += partText
+                                                                if (jsonGetBool(part, "thought", false)) {
+                                                                    onEvent(StreamEvent.ReasoningChunk(partText))
+                                                                } else {
+                                                                    textDelta += partText
+                                                                }
                                                             }
                                                             // Function call
                                                             match (part.get("functionCall")) {

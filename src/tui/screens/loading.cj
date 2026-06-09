@@ -11,10 +11,8 @@ public func renderLoading(query: String, tick: Int64, streamedText: String, retr
         out += sectionTitle(uiText("section_retry"))
         out += "  " + wrapLine(retryText, UI_WIDTH - 2, "  ") + "\n"
     }
-    out += sectionTitle(uiText("section_model_response"))
-    if (streamedText.size == 0) {
-        out += emptyState(uiText("waiting_model"))
-    } else {
+    if (streamedText.size > 0) {
+        out += sectionTitle(uiText("section_model_response"))
         out += wrapLine(streamedText, UI_WIDTH, "") + "\n"
     }
     out += keyBar(uiText("keys_exit"))

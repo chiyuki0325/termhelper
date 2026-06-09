@@ -28,6 +28,17 @@ func jsonGetInt(obj: JsonObject, key: String, default: Int64): Int64 {
     }
 }
 
+/// 从 JsonObject 安全获取布尔值
+func jsonGetBool(obj: JsonObject, key: String, default: Bool): Bool {
+    match (obj.get(key)) {
+        case Some(jv) => match (jv.kind()) {
+            case JsBool => jv.asBool().getValue();
+            case _ => default
+        }
+        case None => default
+    }
+}
+
 /// 去除字符串前缀（若存在），否则返回原字符串
 func stripPrefix(s: String, prefix: String): String {
     if (s.startsWith(prefix)) {

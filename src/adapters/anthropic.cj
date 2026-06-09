@@ -133,7 +133,7 @@ public class AnthropicProvider {
                             let blockIdx = parseBlockIndex(e.data)
                             let (blockType, toolName, toolId, initialInput) = parseBlockStart(e.data)
                             ensureBlockSlot(blocks, blockIdx)
-                            blocks[blockIdx] = (blockType, toolName, toolId, initialInput)
+                            blocks[blockIdx] = (blockType, toolName, toolId, if (blockType == "thinking") { "" } else { initialInput })
                             if (blockType == "tool_use" && toolId.size > 0) {
                                 onEvent(StreamEvent.ToolCallStart(toolId))
                                 // Emit pre-populated input if present (programmatic tool calling)
@@ -143,6 +143,8 @@ public class AnthropicProvider {
                             } else if (blockType == "server_tool_use" && toolId.size > 0) {
                                 // Provider-executed tools (code_execution, web_fetch, web_search)
                                 onEvent(StreamEvent.ToolCallStart(toolId))
+                            } else if (blockType == "thinking" && initialInput.size > 0) {
+                                onEvent(StreamEvent.ReasoningChunk(initialInput))
                             }
                         } else if (e.event == "content_block_delta") {
                             let blockIdx = parseBlockIndex(e.data)
@@ -150,9 +152,13 @@ public class AnthropicProvider {
                                 let (blockType, toolName, toolId, partialJson) = blocks[blockIdx]
                                 let delta = extractDeltaText(e.data)
                                 if (delta.size > 0) {
-                                    if (blockType == "text" || blockType == "thinking" || blockType == "redacted_thinking") {
+                                    if (blockType == "text") {
                                         contentAccum += delta
                                         onEvent(StreamEvent.Chunk(delta))
+                                    } else if (blockType == "thinking") {
+                                        onEvent(StreamEvent.ReasoningChunk(delta))
+                                    } else if (blockType == "redacted_thinking") {
+                                        () // redacted thinking is intentionally not displayed.
                                     } else if (blockType == "tool_use" || blockType == "server_tool_use") {
                                         let newJson = partialJson + delta
                                         blocks[blockIdx] = (blockType, toolName, toolId, newJson)
