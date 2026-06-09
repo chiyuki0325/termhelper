@@ -18,29 +18,3 @@
 [target.aarch64-unknown-linux-gnu]
   [target.aarch64-unknown-linux-gnu.bin-dependencies]
     path-option = ["thirdparty/stdx/linux_aarch64_cjnative/static/stdx"]
-
-# ── 阶段 1 验证测试程序 ──
-
-[package.package-configuration."termhelper.tests.concurrency_verify"]
-  output-type = "executable"
-  compile-option = "-Woff unused"
-
-[package.package-configuration."termhelper.tests.signal_verify"]
-  output-type = "executable"
-  compile-option = "-Woff unused"
-
-[package.package-configuration."termhelper.tests.ffi_pty_verify"]
-  output-type = "executable"
-  compile-option = "-Woff unused"
-
-[package.package-configuration."termhelper.tests.http_verify"]
-  output-type = "executable"
-  compile-option = "-Woff unused"
-
-[package.package-configuration."termhelper.tests.pty_integration"]
-  output-type = "executable"
-  compile-option = "-Woff unused"
-
-[package.package-configuration."termhelper.tests.pty_context_verify"]
-  output-type = "executable"
-  compile-option = "-Woff unused"

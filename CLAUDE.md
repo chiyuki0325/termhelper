@@ -212,14 +212,6 @@ src/
 │   └── json_schema.cj               # LLMResponse JSON Schema
 ├── i18n/
 │   └── i18n.cj                      # LANG/LC_ALL 语言检测和中英文 UI/prompt 文案
-└── tests/                           # 验证测试程序包
-    ├── pkg.cj
-    ├── concurrency_verify/main.cj
-    ├── ffi_pty_verify/main.cj
-    ├── http_verify/main.cj
-    ├── pty_context_verify/main.cj
-    ├── pty_integration/main.cj
-    └── signal_verify/main.cj
 ```
 
 ## 编码约定与注意事项
