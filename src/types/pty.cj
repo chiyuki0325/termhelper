@@ -73,6 +73,8 @@ public class PtyOverlayData {
     public var pendingWrite: Option<String> = None
     @JsonIgnoreNull
     public var pendingReason: Option<String> = None
+    @JsonIgnoreNull
+    public var askUserQuestion: Option<String> = None   // AskUser 专用问题文本，不与 pendingWrite 复用
     public var roundCount: Int64 = 0
     public var maxRounds: Int64 = 50
     public var tokenInput: Int64 = 0

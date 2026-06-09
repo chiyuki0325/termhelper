@@ -1201,10 +1201,10 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
         richTextSpan(handle, "[I]${uiText("pty_interrupt")} ", styleErrorText())
         richTextSpan(handle, "[M]${uiText("pty_manual")}", styleInfo())
     } else if (ptyState == "awaiting_input") {
-        // 显示 LLM 的问题（自动换行）
-        match (data.pendingWrite) {
+        // 显示 LLM 的问题（来自 AskUser 调用）
+        match (data.askUserQuestion) {
             case Some(question) =>
-                richTextSpan(handle, "  " + uiText("overlay_decision") + ": ", styleMuted())
+                richTextSpan(handle, "  " + uiText("pty_llm_question") + ": ", styleMuted())
                 richTextLine(handle, question, styleInfo())
             case None => ()
         }
@@ -1214,9 +1214,9 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
         // 输入框
         let displayInput = if (state.ptySensitiveInput) { ptyMaskedInput(state.ptyInput) } else { state.ptyInput }
         richTextLine(handle, "  " + displayInput + "_", styleInput())
-        // 按钮
-        richTextSpan(handle, "  [Enter]${uiText("pty_confirm_write")} ", styleSuccess())
-        richTextSpan(handle, "[Esc]${uiText("pty_deny")}", styleErrorText())
+        // 按钮 — 用户回答直接送入终端
+        richTextSpan(handle, "  [Enter]${uiText("pty_send_to_terminal")} ", styleSuccess())
+        richTextSpan(handle, "[Esc]${uiText("pty_cancel")}", styleErrorText())
     }
 }
 

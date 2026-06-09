@@ -91,7 +91,7 @@ func ptyToolDefinitions(): ArrayList<ToolDefinition> {
     ))
     tools.add(ToolDefinition(
         "AskUser",
-        "Ask the user for information you don't know (passwords, choices, etc).",
+        "Pause and ask the user a question. The answer goes DIRECTLY to terminal stdin — you will NOT see it (only 'user provided input'). Use for passwords, confirmations, or anything you don't know.",
         "{\"type\":\"object\",\"properties\":{\"question\":{\"type\":\"string\",\"description\":\"The question for the user\"},\"sensitive\":{\"type\":\"boolean\",\"description\":\"True for passwords/tokens that should be masked\"}},\"required\":[\"question\",\"sensitive\"]}"
     ))
     tools.add(ToolDefinition(
@@ -805,7 +805,8 @@ public class PtyAgentLoop {
         let data = PtyOverlayData()
         data.mode = mode
         data.llmDecision = Some(if (sensitive) { "AskUser (sensitive)" } else { "AskUser" })
-        data.pendingWrite = Some(question)
+        data.askUserQuestion = Some(question)
+        data.pendingWrite = None
         data.pendingReason = None
         data.roundCount = roundCount
         data.maxRounds = maxRounds
