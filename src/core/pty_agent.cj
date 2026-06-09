@@ -121,6 +121,7 @@ public class PtyAgentLoop {
     // ── PTY 状态 ──
     private var pty: ?Pty
     private var textBuf: ?PtyTextBuffer
+    private var llmBuf: ?PtyLlmContextBuffer
     private var command: String
 
     // ── 循环状态 ──
@@ -131,11 +132,16 @@ public class PtyAgentLoop {
     private var totalInputTokens: Int64
     private var totalOutputTokens: Int64
 
-    // ── 节流 ──
-    private var lastLlmCallTime: Int64
-    private var lastOutputSize: Int64
-    private var minIntervalMs: Int64
-    private var minBytesThreshold: Int64
+    // ── 调度与成本控制 ──
+    private var lastDecisionAt: Int64
+    private var lastOutputAt: Int64
+    private var firstDirtyOutputAt: Int64
+    private var nextEligibleAt: Int64
+    private var dirtyOutput: Bool
+    private var minDecisionIntervalMs: Int64
+    private var quietWindowMs: Int64
+    private var maxWaitAfterOutputMs: Int64
+    private var decisionHistoryLimit: Int64
 
     // ── 通信 ──
     private let onEvent: (AppEvent) -> Unit  // 回调：发送事件给 TUI
@@ -162,6 +168,7 @@ public class PtyAgentLoop {
     public init(onEvent: (AppEvent) -> Unit, provider: LLMProvider, config: Config, context: EnvironmentContext) {
         this.pty = None
         this.textBuf = None
+        this.llmBuf = None
         this.command = ""
         this.roundCount = 0
         this.maxRounds = config.execution.ptyMaxRounds
@@ -173,10 +180,15 @@ public class PtyAgentLoop {
         this.loopState = PtyLoopState.WaitingOutput
         this.totalInputTokens = 0
         this.totalOutputTokens = 0
-        this.lastLlmCallTime = 0
-        this.lastOutputSize = 0
-        this.minIntervalMs = config.execution.ptyMinIntervalMs
-        this.minBytesThreshold = config.execution.ptyMinBytesThreshold
+        this.lastDecisionAt = 0
+        this.lastOutputAt = 0
+        this.firstDirtyOutputAt = 0
+        this.nextEligibleAt = 0
+        this.dirtyOutput = false
+        this.minDecisionIntervalMs = config.execution.ptyMinIntervalMs
+        this.quietWindowMs = config.execution.ptyQuietWindowMs
+        this.maxWaitAfterOutputMs = config.execution.ptyMaxWaitAfterOutputMs
+        this.decisionHistoryLimit = config.execution.ptyDecisionHistoryLimit
         this.onEvent = onEvent
         this.provider = provider
         this.config = config
@@ -222,6 +234,11 @@ public class PtyAgentLoop {
         this.totalOutputTokens = 0
         this.decisionHistory.clear()
         this.lastToolCall = None
+        this.lastDecisionAt = 0
+        this.lastOutputAt = 0
+        this.firstDirtyOutputAt = 0
+        this.nextEligibleAt = 0
+        this.dirtyOutput = false
 
         // 初始化 debug FIFO
         ptyDebugInit()
@@ -244,6 +261,10 @@ public class PtyAgentLoop {
         }
         let p = pty.getOrThrow()
         this.textBuf = Some(PtyTextBuffer())
+        this.llmBuf = Some(PtyLlmContextBuffer(
+            config.execution.ptyLlmCompactThresholdBytes,
+            config.execution.ptyLlmCompactKeepBytes,
+            config.execution.ptyContextMaxBytes))
 
         // 2. Spawn 交互式命令
         ptyDebugLog("spawning child: ${command}")
@@ -280,6 +301,7 @@ public class PtyAgentLoop {
 
             if (exited && !hasOutput) {
                 ptyDebugLog("child exited, round=${roundCount}, exitCode=${p.getExitCode()}")
+                flushLlmOpenLine()
                 if (roundCount > 0) {
                     result = runFinalLlmRound(p)
                 } else {
@@ -292,20 +314,22 @@ public class PtyAgentLoop {
                 continue
             }
 
-            if (shouldThrottle()) {
-                loopState = PtyLoopState.Throttled(minIntervalMs)
+            if (!shouldCallLlm(exited)) {
+                loopState = PtyLoopState.Throttled(nextDelayMs())
                 onEvent(AppEvent.PtyStateChange(loopState))
                 pushOverlayUpdate()
                 let bufSize = match (textBuf) { case Some(b) => b.size(); case None => 0 }
-                ptyDebugLog("throttled: round=${roundCount} bufsize=${bufSize}")
-                sleepMs(200)
+                let llmSize = match (llmBuf) { case Some(b) => b.rawSize(); case None => 0 }
+                ptyDebugLog("scheduled wait: round=${roundCount} raw=${bufSize} llm=${llmSize} dirty=${dirtyOutput}")
+                sleepMs(100)
                 continue
             }
 
             loopState = PtyLoopState.LLMDecision
             onEvent(AppEvent.PtyStateChange(loopState))
             let bufSize2 = match (textBuf) { case Some(b) => b.size(); case None => 0 }
-            ptyDebugLog("→ LLM round ${roundCount + 1} bufsize=${bufSize2}")
+            let llmSize2 = match (llmBuf) { case Some(b) => b.rawSize(); case None => 0 }
+            ptyDebugLog("→ LLM round ${roundCount + 1} raw=${bufSize2} llm=${llmSize2}")
 
             match (callLlmForDecision()) {
                 case Some(tool) =>
@@ -366,7 +390,33 @@ public class PtyAgentLoop {
             case Some(buf) => buf.append(data)
             case None => ()
         }
+        match (llmBuf) {
+            case Some(buf) =>
+                if (buf.append(data)) {
+                    markDirtyOutput()
+                }
+            case None => ()
+        }
         true
+    }
+
+    private func markDirtyOutput(): Unit {
+        let now = monotonicMs()
+        lastOutputAt = now
+        if (!dirtyOutput) {
+            dirtyOutput = true
+            firstDirtyOutputAt = now
+        }
+    }
+
+    private func flushLlmOpenLine(): Unit {
+        match (llmBuf) {
+            case Some(buf) =>
+                if (buf.finishOpenLine()) {
+                    markDirtyOutput()
+                }
+            case None => ()
+        }
     }
 
     /// 检测 PTY 输出中的密码回显模式，将匹配内容加入脱敏列表
@@ -415,22 +465,42 @@ public class PtyAgentLoop {
         String.fromUtf8(result.toArray())
     }
 
-    private func shouldThrottle(): Bool {
+    private func shouldCallLlm(exited: Bool): Bool {
         let now = monotonicMs()
-
-        if (lastLlmCallTime > 0 && now - lastLlmCallTime < minIntervalMs) {
-            // 在最小间隔内，如果输出增长足够，允许提前触发 LLM
-            match (textBuf) {
-                case Some(buf) =>
-                    if (buf.size() - lastOutputSize >= minBytesThreshold) {
-                        return false
-                    }
-                case None => ()
-            }
-            return true
+        if (!dirtyOutput && !exited) { return false }
+        if (now < nextEligibleAt && !exited) { return false }
+        if (lastDecisionAt > 0 && now - lastDecisionAt < minDecisionIntervalMs && !exited) {
+            return false
         }
-        // 超过最小间隔，始终放行（即使没有新输出）
-        false
+        if (!exited && lastOutputAt > 0 && now - lastOutputAt < quietWindowMs) {
+            if (firstDirtyOutputAt == 0 || now - firstDirtyOutputAt < maxWaitAfterOutputMs) {
+                return false
+            }
+        }
+        match (llmBuf) {
+            case Some(buf) =>
+                if (buf.currentOffset() == buf.sentOffset() && !buf.hasPreview() && !exited) { return false }
+            case None => if (!exited) { return false }
+        }
+        true
+    }
+
+    private func nextDelayMs(): Int64 {
+        let now = monotonicMs()
+        var delay: Int64 = 100
+        if (nextEligibleAt > now) {
+            let d = nextEligibleAt - now
+            if (d > delay) { delay = d }
+        }
+        if (lastDecisionAt > 0 && now - lastDecisionAt < minDecisionIntervalMs) {
+            let d = minDecisionIntervalMs - (now - lastDecisionAt)
+            if (d > delay) { delay = d }
+        }
+        if (lastOutputAt > 0 && now - lastOutputAt < quietWindowMs) {
+            let d = quietWindowMs - (now - lastOutputAt)
+            if (d > delay) { delay = d }
+        }
+        if (delay > 1000) { 1000 } else { delay }
     }
 
     private func callLlmForDecision(): ?PtyTool {
@@ -446,11 +516,16 @@ public class PtyAgentLoop {
 
         for (msg in decisionHistory) { req.messages.add(msg) }
 
-        let currentOutput = match (textBuf) {
-            case Some(buf) => redactSensitive(buf.toPlainText())
-            case None => ""
+        let snapshot = match (llmBuf) {
+            case Some(buf) => buf.snapshot()
+            case None => PtyLlmContextSnapshot("No compacted history.", "", "", 0, 0, 0)
         }
-        req.addUserMessage(buildPtyUserMessage(currentOutput, roundCount, command))
+        req.addUserMessage(buildPtyUserMessage(
+            redactSensitive(snapshot.checkpoint),
+            redactSensitive(snapshot.recent),
+            redactSensitive(snapshot.delta),
+            roundCount,
+            command))
 
         let resp = provider.chat(req)
         var toolCall: ?ToolCall = None
@@ -462,14 +537,18 @@ public class PtyAgentLoop {
         inputTokens = resp.usage.inputTokens
         outputTokens = resp.usage.outputTokens
 
-        lastLlmCallTime = now
-        match (textBuf) {
-            case Some(buf) => lastOutputSize = buf.size()
+        lastDecisionAt = now
+        dirtyOutput = false
+        firstDirtyOutputAt = 0
+        match (llmBuf) {
+            case Some(buf) => buf.markSent()
             case None => ()
         }
         roundCount += 1
         totalInputTokens += inputTokens
         totalOutputTokens += outputTokens
+        ptyDebugLog(
+            "LLM usage context=${snapshot.contextBytes} delta=${snapshot.deltaBytes} compact=${snapshot.compactCount} tokens=${inputTokens}+${outputTokens}")
 
         match (toolCall) {
             case Some(tc) =>
@@ -483,6 +562,7 @@ public class PtyAgentLoop {
                 tcs.add(tc)
                 assistantMsg.toolCalls = Some(tcs)
                 decisionHistory.add(assistantMsg)
+                trimDecisionHistory()
                 tool
             case None =>
                 lastToolCall = None
@@ -594,15 +674,7 @@ public class PtyAgentLoop {
         let clamped = if (ms < 500) { 500 } else if (ms > 30000) { 30000 } else { ms }
         loopState = PtyLoopState.Throttled(clamped)
         onEvent(AppEvent.PtyStateChange(loopState))
-        // 分段 sleep，每 200ms 处理一次 resize
-        var remaining = clamped
-        while (remaining > 0) {
-            let chunk = if (remaining > 200) { 200 } else { remaining }
-            sleepMs(chunk)
-            remaining -= chunk
-            processResize()
-            if (checkInterrupt()) { return }
-        }
+        nextEligibleAt = monotonicMs() + clamped
         addToolResultToHistory("{\"result\":\"waited ${clamped}ms\"}")
     }
 
@@ -618,6 +690,14 @@ public class PtyAgentLoop {
             case None => ()
         }
         decisionHistory.add(msg)
+        trimDecisionHistory()
+    }
+
+    private func trimDecisionHistory(): Unit {
+        let limit = if (decisionHistoryLimit < 2) { 2 } else { decisionHistoryLimit }
+        while (decisionHistory.size > limit) {
+            decisionHistory.remove(at: 0)
+        }
     }
 
     // ── 同步辅助 ──
@@ -770,16 +850,28 @@ public class PtyAgentLoop {
 
 // ── 公开辅助函数 ──
 
-func buildPtyUserMessage(terminalOutput: String, round: Int64, command: String): String {
+func buildPtyUserMessage(checkpoint: String, recent: String, delta: String, round: Int64, command: String): String {
     """
-Current terminal output (round ${round}):
----
-${terminalOutput}
----
-
 The command being executed is: ${command}
 
-Choose the next action based on the terminal output above.
+Round: ${round}
+
+Terminal checkpoint:
+---
+${checkpoint}
+---
+
+Recent terminal output after compaction:
+---
+${recent}
+---
+
+New normalized output since your previous decision:
+---
+${delta}
+---
+
+Choose the next action based on the terminal output above. The output is normalized: carriage-return and ANSI progress bars are compressed to their latest visible state.
 - If the program is prompting for input, use Write to provide it.
 - If you need information from the user (password, choice), use AskUser.
 - If the output is still updating, use Wait.
@@ -949,4 +1041,3 @@ func sleepMs(ms: Int64): Unit {
         usleep(UInt64(ms) * 1000)
     }
 }
-

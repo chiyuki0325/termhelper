@@ -40,8 +40,18 @@ public class ExecConfig {
     public var ptyMaxRounds: Int64 = 50
     @JsonName["pty_min_interval_ms"]
     public var ptyMinIntervalMs: Int64 = 2000
-    @JsonName["pty_min_bytes_threshold"]
-    public var ptyMinBytesThreshold: Int64 = 256
+    @JsonName["pty_quiet_window_ms"]
+    public var ptyQuietWindowMs: Int64 = 800
+    @JsonName["pty_max_wait_after_output_ms"]
+    public var ptyMaxWaitAfterOutputMs: Int64 = 5000
+    @JsonName["pty_llm_compact_threshold_bytes"]
+    public var ptyLlmCompactThresholdBytes: Int64 = 131072
+    @JsonName["pty_llm_compact_keep_bytes"]
+    public var ptyLlmCompactKeepBytes: Int64 = 24576
+    @JsonName["pty_decision_history_limit"]
+    public var ptyDecisionHistoryLimit: Int64 = 8
+    @JsonName["pty_context_max_bytes"]
+    public var ptyContextMaxBytes: Int64 = 32768
 }
 
 @JsonAdapter
@@ -161,7 +171,13 @@ func parseExecInto(exec: ExecConfig, obj: JsonObject): Unit {
     exec.ptyDefaultMode = jsonGetString(obj, "pty_default_mode", exec.ptyDefaultMode)
     exec.ptyMaxRounds = jsonGetInt(obj, "pty_max_rounds", exec.ptyMaxRounds)
     exec.ptyMinIntervalMs = jsonGetInt(obj, "pty_min_interval_ms", exec.ptyMinIntervalMs)
-    exec.ptyMinBytesThreshold = jsonGetInt(obj, "pty_min_bytes_threshold", exec.ptyMinBytesThreshold)
+    exec.ptyQuietWindowMs = jsonGetInt(obj, "pty_quiet_window_ms", exec.ptyQuietWindowMs)
+    exec.ptyMaxWaitAfterOutputMs = jsonGetInt(obj, "pty_max_wait_after_output_ms", exec.ptyMaxWaitAfterOutputMs)
+    exec.ptyLlmCompactThresholdBytes = jsonGetInt(
+        obj, "pty_llm_compact_threshold_bytes", exec.ptyLlmCompactThresholdBytes)
+    exec.ptyLlmCompactKeepBytes = jsonGetInt(obj, "pty_llm_compact_keep_bytes", exec.ptyLlmCompactKeepBytes)
+    exec.ptyDecisionHistoryLimit = jsonGetInt(obj, "pty_decision_history_limit", exec.ptyDecisionHistoryLimit)
+    exec.ptyContextMaxBytes = jsonGetInt(obj, "pty_context_max_bytes", exec.ptyContextMaxBytes)
 }
 
 func parseRetryInto(retry: RetryConfig, obj: JsonObject): Unit {
@@ -234,7 +250,12 @@ func configToNestedJson(config: Config): JsonObject {
     execObj.put("pty_default_mode", JsonString(config.execution.ptyDefaultMode))
     execObj.put("pty_max_rounds", JsonInt(config.execution.ptyMaxRounds))
     execObj.put("pty_min_interval_ms", JsonInt(config.execution.ptyMinIntervalMs))
-    execObj.put("pty_min_bytes_threshold", JsonInt(config.execution.ptyMinBytesThreshold))
+    execObj.put("pty_quiet_window_ms", JsonInt(config.execution.ptyQuietWindowMs))
+    execObj.put("pty_max_wait_after_output_ms", JsonInt(config.execution.ptyMaxWaitAfterOutputMs))
+    execObj.put("pty_llm_compact_threshold_bytes", JsonInt(config.execution.ptyLlmCompactThresholdBytes))
+    execObj.put("pty_llm_compact_keep_bytes", JsonInt(config.execution.ptyLlmCompactKeepBytes))
+    execObj.put("pty_decision_history_limit", JsonInt(config.execution.ptyDecisionHistoryLimit))
+    execObj.put("pty_context_max_bytes", JsonInt(config.execution.ptyContextMaxBytes))
     obj.put("execution", execObj)
 
     let retryObj = JsonObject()

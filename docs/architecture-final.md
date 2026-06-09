@@ -37,7 +37,7 @@
 │  ┌────────────┐  ┌────────────┐  ┌─────────────────────────┐ │
 │  │  Session   │  │  Context   │  │  PtyAgentLoop           │ │
 │  │  (会话编排) │  │  Manager   │  │  (PTY agentic 循环,     │ │
-│  │  [主线程]   │  │  +Migration│  │   含节流/上限/超时控制)  │ │
+│  │  [主线程]   │  │  +Migration│  │   含调度/compact/上限)    │ │
 │  └─────┬──────┘  └─────┬──────┘  └────────────┬────────────┘ │
 │        │               │                      │               │
 │  ┌─────┴───────────────┴──────────────────────┴────────────┐ │
@@ -77,7 +77,7 @@
 |----|----|------|
 | `chat` / `chatStream` 两种方法 | 增加 `chatWithTools` 方法，支持 tool-calling | PTY agentic 循环需要 LLM 选择工具 |
 | JSON 文本提取容错 | Provider 原生 Structured Output（`response_format` / tool use / `response_schema`） | 从源头保证 JSON 合规，消除解析脆弱性 |
-| PTY agentic 循环无节流 | 最小间隔 + 最小字节阈值 + 单次会话最大 50 轮 + 用量追踪 | 避免 LLM 调用风暴和成本失控 |
+| PTY agentic 循环无成本控制 | 事件驱动调度 + compact buffer + 终端文本归一化 + 单次会话最大 50 轮 + 用量追踪 | 避免 LLM 调用风暴、长输出重复计费和进度条刷屏污染上下文 |
 | `PtyTool::Wait` 无参数 | `Wait(duration_ms)` — LLM 指定等待时长 | 避免空转轮询 |
 | Session 被主线程和后台任务并发访问 | Session 仅主线程持有；后台任务通过 Channel 传回数据，主线程追加 | 消除数据竞争，无需加锁 |
 | PTY 输出在 ratatui 组件中渲染 | PtyAgentic 屏：虚拟终端 = 真实终端大小 → PTY 内容全屏渲染为底层 → ratatui overlay 面板浮动在上 | 避免 ANSI 序列与 ratatui 绘制冲突；用户看到与原生终端一致的输出 |
@@ -106,7 +106,7 @@
 | **Screen 状态机驱动 UI** | 6 个 Screen（含 Prompt 的三个子模式），键盘事件直接分发，不经过中间事件层 |
 | **适配器隔离外部服务** | LLM Provider 实现在 adapter/ 下，通过接口与 core 解耦 |
 | **基础设施封装 OS 原语** | PTY 创建、子进程 spawn、剪贴板调用均在 infra/ 下，不含业务逻辑 |
-| **Agentic PTY 循环** | 交互式命令执行采用 LLM tool-calling 循环，每轮选择工具执行；含节流和调用上限 |
+| **Agentic PTY 循环** | 交互式命令执行采用 LLM tool-calling 循环，每轮选择工具执行；含事件调度、compact buffer 和调用上限 |
 | **安全默认** | PTY 默认逐次确认，诊断命令默认需授权，危险命令二次确认，敏感输入不回传 LLM |
 | **会话隔离** | 对话历史仅内存保留，进程退出即丢弃；仅环境上下文持久化 |
 | **坚持运行** | TUI 始终给用户可操作的回退路径，不因任何错误崩溃退出；崩溃时恢复终端状态 |
@@ -152,7 +152,7 @@ termhelper/
 │   │   ├── session.cj                   # Session：对话历史管理、LLM 交互循环编排 [仅主线程]
 │   │   ├── context.cj                   # ContextManager：环境上下文持久化 + 版本迁移
 │   │   ├── request.cj                   # RequestBuilder：构造 LLM 请求 (system prompt + context + history + tools)
-│   │   ├── pty_agent.cj                 # PtyAgentLoop：PTY agentic 循环 (含节流/上限/超时)
+│   │   ├── pty_agent.cj                 # PtyAgentLoop：PTY agentic 循环 (含调度/compact/上限)
 │   │   ├── safety_fallback.cj           # SafetyFallback：LLM 未标记危险时的本地兜底检查
 │   │   └── retry.cj                     # LLM 重试策略 (指数退避 + 错误分类)
 │   │
@@ -411,7 +411,7 @@ enum PtyMode {
 
 ### 4.1 设计动机
 
-与 v2 相同：v1 的 PTY 循环 LLM 只返回 write/done 两种 action，扩展性差。实际场景需要 write/ask_user/wait/exit/interrupt 五种工具。v3 在此基础上增加节流、调用上限和敏感输入控制。
+与 v2 相同：v1 的 PTY 循环 LLM 只返回 write/done 两种 action，扩展性差。实际场景需要 write/ask_user/wait/exit/interrupt 五种工具。v3 在此基础上增加事件驱动调度、compact buffer、调用上限和敏感输入控制。
 
 ### 4.2 循环流程
 
@@ -426,15 +426,16 @@ PtyAgentLoop.start(command)
 │                                                         │
 │  var roundCount = 0                                     │
 │  var maxRounds = 50                                     │
-│  var lastLLMCallTime = 0                                │
-│  var accumulatedOutput = 0                              │
+│  var scheduler = PtyDecisionScheduler()                 │
+│  var llmContext = PtyLlmContextBuffer()                 │
 │                                                         │
 │  while roundCount < maxRounds:                          │
 │    ┌──────────────────────────────────────────────┐     │
 │    │ 1. 读 PTY master fd (非阻塞)                  │     │
 │    │    → 追加到原始输出缓冲区                      │     │
 │    │    → 更新虚拟终端屏幕状态 (同真实终端大小)     │     │
-│    │    → 累计新增字节数                           │     │
+│    │    → 归一化终端文本 (处理 \r/ANSI 进度条)       │     │
+│    │    → append 到 LLM compact buffer              │     │
 │    │    → 发送 PtyScreenUpdate(全屏文本) 到 TUI    │     │
 │    └──────────────┬───────────────────────────────┘     │
 │                   │                                     │
@@ -444,17 +445,19 @@ PtyAgentLoop.start(command)
 │    └──────────────┬───────────────────────────────┘     │
 │                   │                                     │
 │    ┌──────────────▼───────────────────────────────┐     │
-│    │ 3. 节流检查:                                  │     │
-│    │    if 距上次 LLM 调用 < 2000ms: continue      │     │
-│    │    if 累计新增字节 < 阈值 (如 256B):           │     │
-│    │      if 子进程未退出: continue (继续读)       │     │
+│    │ 3. 调度检查:                                  │     │
+│    │    if 无新输出且子进程未退出: continue         │     │
+│    │    if 未到 Wait/退避设置的 nextEligibleAt:     │     │
+│    │      continue                                 │     │
+│    │    if 输出仍在 quiet window 内且未到硬上限:    │     │
+│    │      continue                                 │     │
 │    └──────────────┬───────────────────────────────┘     │
 │                   │                                     │
 │    ┌──────────────▼───────────────────────────────┐     │
 │    │ 4. 构造 LLM tool-calling 请求:                │     │
 │    │    system: PTY agent prompt                  │     │
-│    │    context: 命令 + 历史决策 (脱敏后)           │     │
-│    │    user: "以下是 PTY 最新输出:" + 纯文本diff   │     │
+│    │    context: 命令 + 最近历史决策 (脱敏后)       │     │
+│    │    user: compact checkpoint + recent + delta   │     │
 │    │    tools: [write, ask_user, wait,             │     │
 │    │            exit, interrupt]                   │     │
 │    │    tool_choice: "required"                    │     │
@@ -463,7 +466,7 @@ PtyAgentLoop.start(command)
 │    ┌──────────────▼───────────────────────────────┐     │
 │    │ 5. LLM 返回 PtyTool 选择                      │     │
 │    │    roundCount += 1                            │     │
-│    │    更新 lastLLMCallTime / 重置累计字节         │     │
+│    │    更新 lastDecisionAt / lastSentOffset        │     │
 │    └──────────────┬───────────────────────────────┘     │
 │                   │                                     │
 │        ┌──────────┼──────────┬──────────┬──────────┐    │
@@ -490,17 +493,20 @@ PtyAgentLoop.start(command)
 └─────────────────────────────────────────────────────────┘
 ```
 
-### 4.3 节流与成本控制
+### 4.3 调度与成本控制
 
 | 控制项 | 值 | 说明 |
 |--------|-----|------|
-| 最小 LLM 调用间隔 | 2000ms | 距上次调用不足 2s 时跳过本轮 |
-| 最小新增字节阈值 | 256 bytes | 累计新输出不足 256 字节时跳过（子进程已退出除外） |
+| 事件驱动调用 | 仅在有新输出、用户输入、工具写入或子进程退出后考虑调用 | 静默期间不按时间空转调用 LLM |
+| 输出静默窗口 | 默认 800ms | 输出仍在刷新时先等待稳定，避免进度条/刷屏期间高频调用 |
+| 持续输出硬上限 | 默认 5000ms | 输出一直不停止时最多等待该时长后调用一次 |
+| LLM compact buffer | 超过阈值后一次性 compact，保留尾部并继续 append | 不使用滑动窗口，避免频繁搬移历史和破坏缓存局部性 |
+| 终端文本归一化 | 处理 `\r`、`\b`、`ESC[K`、`ESC[0G` 等覆盖语义 | 防止进度条在 LLM 上下文中堆成重复历史 |
 | 单次会话最大轮次 | 50 | 达到后暂停，询问用户是否继续 |
-| Wait 工具时长范围 | LLM 建议值，系统 clamp 到 [500ms, 30s] | 防止 LLM 选择极短或极长等待 |
+| Wait 工具时长范围 | LLM 建议值，系统 clamp 到 [500ms, 30s] | 设置 `nextEligibleAt`，到时后仍需满足“有新输出或进程退出” |
 | 用量追踪 | 每轮记录 prompt_tokens + completion_tokens，overlay 面板展示累计值 | 用户知情 PTY 会话的 API 成本 |
 
-> 节流逻辑在 PtyAgentLoop 内部实现，不依赖外部调度器。非阻塞读 PTY → 追加缓冲区 → 检查节流条件 → 满足则调 LLM，不满足则 loop 继续读。
+详细设计见 [PTY Agent Token 控制设计方案](./pty-agent-token-control-design.md)。本文档只保留架构级约束：PTY agent 不再使用“最小间隔 + 最小新增字节阈值”的旧节流模型；LLM 调用必须由事件调度器放行，且发送给 LLM 的文本必须来自 compact 后的终端语义归一化 buffer。
 
 ### 4.4 PTY 输出渲染策略（v3 变更：全屏底层 + overlay）
 
@@ -829,7 +835,7 @@ struct ExecuteState {
 │ - HTTP 请求      │         │ - spawn 子进程         │
 │ - SSE 流式解析   │         │ - PTY I/O 读写         │
 │ - Structured     │         │ - PTY agentic 循环     │
-│   Output 校验    │         │   (节流/上限/超时)      │
+│   Output 校验    │         │   (调度/compact/上限)   │
 │ - 重试逻辑       │         │ → channel.send()      │
 │ → channel.send() │         │                       │
 └──────────────────┘         └───────────────────────┘
@@ -897,7 +903,12 @@ structured_output_mode:
     "pty_default_mode": "confirm",
     "pty_max_rounds": 50,
     "pty_min_interval_ms": 2000,
-    "pty_min_bytes_threshold": 256
+    "pty_quiet_window_ms": 800,
+    "pty_max_wait_after_output_ms": 5000,
+    "pty_llm_compact_threshold_bytes": 131072,
+    "pty_llm_compact_keep_bytes": 24576,
+    "pty_decision_history_limit": 8,
+    "pty_context_max_bytes": 32768
   },
   "retry": {
     "max_retries": 3,

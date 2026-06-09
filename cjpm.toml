@@ -36,3 +36,7 @@
 [package.package-configuration."termhelper.tests.pty_integration"]
   output-type = "executable"
   compile-option = "-Woff unused"
+
+[package.package-configuration."termhelper.tests.pty_context_verify"]
+  output-type = "executable"
+  compile-option = "-Woff unused"
