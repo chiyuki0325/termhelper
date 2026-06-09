@@ -5,15 +5,19 @@
   version = "0.1.0"
   output-type = "executable"
   compile-option = "--static -Woff driver-arg -ldl"
-  link-option = "-L/home/chiyuki/Projects/termhelper/thirdparty/ratatui/cangjie-tui-ffi/target/release -l:libcangjie_tui.a -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc"
+  link-option = "-Lthirdparty/ratatui/cangjie-tui-ffi/target/release -l:libcangjie_tui.a -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc"
 
 [dependencies]
   ratatui = { path = "thirdparty/ratatui/cangjie-ratatui-sdk" }
   naivejson = { path = "thirdparty/naivejson/naivejson" }
 
+[target.x86_64-unknown-linux-gnu]
+  [target.x86_64-unknown-linux-gnu.bin-dependencies]
+    path-option = ["thirdparty/stdx/linux_x86_64_cjnative/static/stdx"]
+
 [target.aarch64-unknown-linux-gnu]
   [target.aarch64-unknown-linux-gnu.bin-dependencies]
-    path-option = ["/home/chiyuki/Documents/Apps/cangjie/stdx/static/stdx"]
+    path-option = ["thirdparty/stdx/linux_aarch64_cjnative/static/stdx"]
 
 # ── 阶段 1 验证测试程序 ──
 

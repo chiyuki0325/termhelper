@@ -13,7 +13,7 @@
 ### 首次配置
 
 ```bash
-# 1. 拉取第三方依赖（naivejson、ratatui），构建 Rust FFI
+# 1. 拉取第三方依赖（stdx、naivejson、ratatui），构建 Rust FFI
 bash scripts/setup-deps.sh
 
 # 2. 编译项目
@@ -283,10 +283,27 @@ String(Rune(Int32(byte)))
 
 | 依赖 | 路径 | 说明 |
 |------|------|------|
+| stdx | `thirdparty/stdx/` | 仓颉扩展标准库 release 包，`setup-deps.sh` 按当前架构下载 |
 | ratatui | `thirdparty/ratatui/` | Rust FFI 绑定的 TUI 框架（cangjie-ratatui-sdk + cangjie-tui-ffi） |
 | naivejson | `thirdparty/naivejson/` | JSON 序列化库，提供 `@JsonAdapter` 宏和 `DataModel` 转换 |
 
 `references/` 目录包含参考实现（claude-code SDK 源码、musl libc PTY 实现、ratatui/naivejson 的本地备份）。
+
+### thirdparty 管理规则
+
+`thirdparty/` 整体被主仓库 `.gitignore` 忽略，不提交第三方源码、release 包、解压产物或 Rust target 产物。第三方依赖的获取和本地修补统一由 `scripts/setup-deps.sh` 完成：
+
+- stdx：按当前 CPU 架构下载 `cangjie_stdx` release zip，解压到 `thirdparty/stdx/<arch>_cjnative/`。
+- naivejson：clone 后 patch 其 `naivejson/cjpm.toml` 中当前架构的 stdx 路径，指向本项目 `thirdparty/stdx/.../static/stdx`。
+- ratatui：clone 后 patch SDK 的 Rust FFI link path，并构建 `cangjie-tui-ffi`。
+- 主项目：`setup-deps.sh` 会 patch 根目录 `cjpm.toml` 的 ratatui FFI `link-option`，把提交版相对路径替换为当前 checkout 的绝对路径，供本机 `cjpm build` 使用。
+
+绝对路径不应该进入提交。尤其是 `setup-deps.sh` 运行后，根目录 `cjpm.toml` 可能出现当前机器的绝对路径（例如 `-L.../thirdparty/ratatui/cangjie-tui-ffi/target/release`）。如果本轮需要修改并提交 `cjpm.toml`，提交前必须把这些本地 patch 恢复为仓库约定的相对路径；如果本轮没有修改 `cjpm.toml`，不要 add 它。提交前用以下命令检查：
+
+```bash
+rg -n "/home/|/Users/|Documents/Apps|cangjie-tui-ffi/target/release" cjpm.toml scripts/setup-deps.sh README.md CLAUDE.md
+git diff --cached -- cjpm.toml
+```
 
 ### ratatui SDK 注意事项
 

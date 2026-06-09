@@ -23,7 +23,7 @@
 
 ## 安装
 
-准备依赖并构建：
+准备依赖并构建。`setup-deps.sh` 会拉取 naivejson、ratatui，并按当前 CPU 架构下载 stdx 到 `thirdparty/stdx/`：
 
 ```bash
 bash scripts/setup-deps.sh
