@@ -111,7 +111,7 @@ func readLineFromStdin(): String {
 }
 
 func promptYesNo(prompt: String): Bool {
-    print(prompt)
+    print(prompt, flush: true)
     let answer = readLineFromStdin().trimAscii()
     answer == "y" || answer == "Y" || answer == "yes" || answer == "YES"
 }
