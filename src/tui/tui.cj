@@ -589,7 +589,7 @@ func syncPtyViewport(state: TuiAppState, width: Int64, height: Int64): Unit {
     let (cols, rows) = computePtySize(width, height)
 
     match (state.ptyAgent) {
-        case Some(agent) => agent.requestResize(UInt16(cols), UInt16(rows))
+        case Some(agent) => agent.requestResize(safeUInt16(cols), safeUInt16(rows))
         case None => ()
     }
 
@@ -667,8 +667,8 @@ func startPtyAgentic(state: TuiAppState, command: String, config: Config): Unit 
     state.terminalWidth = Int64(cols)
     state.terminalHeight = Int64(rows)
     let (initialPtyCols, initialPtyRows) = computePtySize(Int64(cols), Int64(rows))
-    let ptyRows = UInt16(initialPtyRows)
-    let ptyCols = UInt16(initialPtyCols)
+    let ptyRows = safeUInt16(initialPtyRows)
+    let ptyCols = safeUInt16(initialPtyCols)
     debugTrace("startPtyAgentic: terminal_size=${rows}x${cols} pty_size=${ptyRows}x${ptyCols}")
 
     // 在后台启动 PtyAgentLoop
@@ -1047,13 +1047,12 @@ func countLinesFromBytes(bytes: ArrayList<UInt8>): Int64 {
 }
 
 func scrollOffsetToUInt16(offset: Int64): UInt16 {
-    if (offset <= 0) {
-        0
-    } else if (offset > 65535) {
-        65535
-    } else {
-        UInt16(offset)
-    }
+    if (offset <= 0) { 0 } else if (offset > 65535) { 65535 } else { UInt16(offset) }
+}
+
+/// 安全 Int64→UInt16（钳位），避免 OverflowException
+func safeUInt16(v: Int64): UInt16 {
+    if (v <= 0) { 0 } else if (v > 65535) { 65535 } else { UInt16(v) }
 }
 
 func render(terminal: Int64, state: TuiAppState): Unit {
@@ -1124,7 +1123,7 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
     match (createBlockWidget(screenTitle(state))) {
         case Ok(handle) =>
             let _ = setWidgetPosition(handle, 0, 0)
-            let _ = setWidgetSize(handle, UInt16(termWidth), 0)
+            let _ = setWidgetSize(handle, safeUInt16(termWidth), 0)
             let _ = addWidgetToTerminal(terminal, handle)
         case Err(_) => ()
     }
@@ -1135,7 +1134,7 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
         match (createAnsiTextWidget(rawBytes)) {
             case Ok(handle) =>
                 let _ = setWidgetPosition(handle, 1, 1)
-                let _ = setWidgetSize(handle, UInt16(widgetWidth), UInt16(contentH))
+                let _ = setWidgetSize(handle, safeUInt16(widgetWidth), safeUInt16(contentH))
                 let _ = setWidgetScroll(handle, scrollOffsetToUInt16(state.scrollOffset), 0)
                 let _ = addWidgetToTerminal(terminal, handle)
                 state.widgetHandle = Some(handle)
@@ -1149,8 +1148,8 @@ func renderPtyMultiWidget(terminal: Int64, state: TuiAppState, spinnerFrame: Int
         match (createRichTextWidget()) {
             case Ok(handle) =>
                 fillPtyOverlayWidget(handle, state)
-                let _ = setWidgetPosition(handle, 1, UInt16(overlayY))
-                let _ = setWidgetSize(handle, UInt16(widgetWidth), UInt16(overlayRows))
+                let _ = setWidgetPosition(handle, 1, safeUInt16(overlayY))
+                let _ = setWidgetSize(handle, safeUInt16(widgetWidth), safeUInt16(overlayRows))
                 let _ = addWidgetToTerminal(terminal, handle)
             case Err(_) => ()
         }

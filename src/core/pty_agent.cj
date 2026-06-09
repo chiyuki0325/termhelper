@@ -228,6 +228,19 @@ public class PtyAgentLoop {
     // ── 主入口（后台线程调用）──
 
     public func run(command: String, terminalRows: UInt16, terminalCols: UInt16): PtyResult {
+        try {
+            return runInternal(command, terminalRows, terminalCols)
+        } catch (e: Exception) {
+            ptyDebugLog("PTY agent run() threw: ${e.message}")
+            let result = PtyResult()
+            result.exitCode = -1
+            result.summary = "PTY agent crashed: ${e.message}"
+            onEvent(AppEvent.PtyStateChange(PtyLoopState.Interrupted("Agent crashed: ${e.message}")))
+            return result
+        }
+    }
+
+    private func runInternal(command: String, terminalRows: UInt16, terminalCols: UInt16): PtyResult {
         this.command = command
         this.roundCount = 0
         this.totalInputTokens = 0
@@ -297,7 +310,13 @@ public class PtyAgentLoop {
             processResize()
 
             let exited = p.childExited()
-            let hasOutput = readAndProcessOutput(p)
+            var hasOutput = false
+            try {
+                hasOutput = readAndProcessOutput(p)
+            } catch (e: Exception) {
+                ptyDebugLog("readAndProcessOutput threw: ${e.message}")
+                hasOutput = false
+            }
 
             if (exited && !hasOutput) {
                 ptyDebugLog("child exited, round=${roundCount}, exitCode=${p.getExitCode()}")
@@ -325,20 +344,46 @@ public class PtyAgentLoop {
                 continue
             }
 
+            // LLM 调用前：榨干 PTY 缓冲区，确保显示最新内容
+            drainPtyOutput(p)
+
             loopState = PtyLoopState.LLMDecision
             onEvent(AppEvent.PtyStateChange(loopState))
             let bufSize2 = match (textBuf) { case Some(b) => b.size(); case None => 0 }
             let llmSize2 = match (llmBuf) { case Some(b) => b.rawSize(); case None => 0 }
             ptyDebugLog("→ LLM round ${roundCount + 1} raw=${bufSize2} llm=${llmSize2}")
 
-            match (callLlmForDecision()) {
+            var toolResult: ?PtyTool = None
+            try {
+                toolResult = callLlmForDecision()
+            } catch (e: Exception) {
+                ptyDebugLog("callLlmForDecision threw: ${e.message}")
+                loopState = PtyLoopState.Interrupted("LLM call failed: ${e.message}")
+                onEvent(AppEvent.PtyStateChange(loopState))
+                running = false
+                result = collectResult(p)
+                continue
+            }
+
+            // LLM 返回后：立即读取调用期间堆积的输出
+            drainPtyOutput(p)
+
+            match (toolResult) {
                 case Some(tool) =>
                     ptyDebugLog("← LLM tool: ${toolToolName(tool)} input=${totalInputTokens} output=${totalOutputTokens}")
-                    if (!executeTool(p, tool)) {
-                        ptyDebugLog("executeTool returned false, ending loop")
+                    try {
+                        if (!executeTool(p, tool)) {
+                            ptyDebugLog("executeTool returned false, ending loop")
+                            running = false
+                            result = collectResult(p)
+                            loopState = PtyLoopState.Finished(result)
+                            onEvent(AppEvent.PtyStateChange(loopState))
+                        }
+                    } catch (e: Exception) {
+                        ptyDebugLog("executeTool threw: ${e.message}")
                         running = false
                         result = collectResult(p)
-                        loopState = PtyLoopState.Finished(result)
+                        loopState = PtyLoopState.Interrupted("Tool execution failed: ${e.message}")
                         onEvent(AppEvent.PtyStateChange(loopState))
                     }
                 case None => sleepMs(1000)
@@ -372,6 +417,33 @@ public class PtyAgentLoop {
     }
 
     // ── 内部方法 ──
+
+    /// 非阻塞榨干 PTY 输出缓冲区，确保显示最新内容，避免 LLM 调用期间终端"冻住"
+    private func drainPtyOutput(p: Pty): Unit {
+        var drained: Int64 = 0
+        var totalBytes: Int64 = 0
+        // 最多读 20 轮，避免子进程持续输出时死循环
+        while (drained < 20) {
+            let data = p.tryRead(65536)
+            if (data.size == 0) { break }
+            totalBytes += data.size
+            drained += 1
+            onEvent(AppEvent.PtyScreenUpdate(data))
+            detectPasswordEcho(data)
+            match (textBuf) {
+                case Some(buf) => buf.append(data)
+                case None => ()
+            }
+            match (llmBuf) {
+                case Some(buf) =>
+                    if (buf.append(data)) { markDirtyOutput() }
+                case None => ()
+            }
+        }
+        if (totalBytes > 0) {
+            ptyDebugLog("drainPtyOutput: ${drained} reads, ${totalBytes} bytes")
+        }
+    }
 
     private func readAndProcessOutput(p: Pty): Bool {
         let data = p.tryRead(65536)
