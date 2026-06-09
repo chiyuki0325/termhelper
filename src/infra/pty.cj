@@ -53,12 +53,16 @@ public class Pty {
     public let slavePath: String
     private var childPid: Int32
     private var closed: Bool
+    private var childExitedCached: Bool
+    private var childExitCodeCached: Int32
 
     private init(masterFd: Int32, slavePath: String, childPid: Int32) {
         this.masterFd = masterFd
         this.slavePath = slavePath
         this.childPid = childPid
         this.closed = false
+        this.childExitedCached = false
+        this.childExitCodeCached = -1
     }
 
     ~init() {
@@ -152,6 +156,8 @@ public class Pty {
             }
 
             this.childPid = pid
+            this.childExitedCached = false
+            this.childExitCodeCached = -1
             true
         }
     }
@@ -191,12 +197,19 @@ public class Pty {
 
     /// 检查子进程是否已退出
     public func childExited(): Bool {
+        if (childExitedCached) { return true }
         if (childPid < 0) { return true }
         unsafe {
             let statusPtr = LibC.malloc<Int32>(count: 1)
             statusPtr.write(0, 0)
             let result = waitpid(childPid, statusPtr, WNOHANG)
             let exited = result == childPid
+            if (exited) {
+                let raw = statusPtr.read(0)
+                childExitCodeCached = decodeExitCode(raw)
+                childExitedCached = true
+                childPid = -1
+            }
             LibC.free(statusPtr)
             exited
         }
@@ -204,6 +217,7 @@ public class Pty {
 
     /// 获取子进程退出码（仅在 childExited 后有效）
     public func getExitCode(): Int32 {
+        if (childExitedCached) { return childExitCodeCached }
         if (childPid < 0) { return -1 }
         unsafe {
             let statusPtr = LibC.malloc<Int32>(count: 1)
@@ -211,7 +225,10 @@ public class Pty {
             waitpid(childPid, statusPtr, 0)
             let raw = statusPtr.read(0)
             LibC.free(statusPtr)
-            if ((raw & 0x7F) == 0) { return (raw >> 8) & 0xFF } else { return -1 }
+            childExitCodeCached = decodeExitCode(raw)
+            childExitedCached = true
+            childPid = -1
+            childExitCodeCached
         }
     }
 
@@ -240,6 +257,10 @@ public class Pty {
         unsafe { ioctl(masterFd, TIOCGWINSZ, inout ws) }
         (ws.ws_col, ws.ws_row)
     }
+}
+
+func decodeExitCode(raw: Int32): Int32 {
+    if ((raw & 0x7F) == 0) { (raw >> 8) & 0xFF } else { -1 }
 }
 
 // ── 主机终端大小查询（供 TUI 层调用，阶段 6）──

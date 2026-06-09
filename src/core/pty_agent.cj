@@ -156,6 +156,12 @@ public class PtyAgentLoop {
     private var modeSwitchRequested: ?PtyMode
     private var resizeRequested: ?(UInt16, UInt16)
 
+    // ── PTY 输出 reader 同步 ──
+    private let outputMtx: Mutex
+    private var outputReaderRunning: Bool
+    private var childExitedSeen: Bool
+    private var childExitCodeSeen: Int32
+
     // ── LLM 对话历史（仅 PTY agent 上下文）──
     private var decisionHistory: ArrayList<Message>
 
@@ -198,6 +204,10 @@ public class PtyAgentLoop {
         this.interruptRequested = false
         this.modeSwitchRequested = None
         this.resizeRequested = None
+        this.outputMtx = Mutex()
+        this.outputReaderRunning = false
+        this.childExitedSeen = false
+        this.childExitCodeSeen = -1
         this.decisionHistory = ArrayList<Message>()
         this.lastToolCall = None
         this.redactedPatterns = ArrayList<String>()
@@ -252,6 +262,9 @@ public class PtyAgentLoop {
         this.firstDirtyOutputAt = 0
         this.nextEligibleAt = 0
         this.dirtyOutput = false
+        this.outputReaderRunning = false
+        this.childExitedSeen = false
+        this.childExitCodeSeen = -1
 
         // 初始化 debug FIFO
         ptyDebugInit()
@@ -293,6 +306,7 @@ public class PtyAgentLoop {
 
         // 3. 发送初始浮层面板状态
         pushOverlayUpdate()
+        startOutputReader(p)
 
         // 4. 进入主循环
         var running = true
@@ -309,18 +323,10 @@ public class PtyAgentLoop {
             processModeSwitch()
             processResize()
 
-            let exited = p.childExited()
-            var hasOutput = false
-            try {
-                hasOutput = readAndProcessOutput(p)
-            } catch (e: Exception) {
-                ptyDebugLog("readAndProcessOutput threw: ${e.message}")
-                hasOutput = false
-            }
+            let exited = hasChildExited()
 
-            if (exited && !hasOutput) {
-                ptyDebugLog("child exited, round=${roundCount}, exitCode=${p.getExitCode()}")
-                flushLlmOpenLine()
+            if (exited) {
+                ptyDebugLog("child exited, round=${roundCount}, exitCode=${getChildExitCode()}")
                 if (roundCount > 0) {
                     result = runFinalLlmRound(p)
                 } else {
@@ -337,20 +343,16 @@ public class PtyAgentLoop {
                 loopState = PtyLoopState.Throttled(nextDelayMs())
                 onEvent(AppEvent.PtyStateChange(loopState))
                 pushOverlayUpdate()
-                let bufSize = match (textBuf) { case Some(b) => b.size(); case None => 0 }
-                let llmSize = match (llmBuf) { case Some(b) => b.rawSize(); case None => 0 }
-                ptyDebugLog("scheduled wait: round=${roundCount} raw=${bufSize} llm=${llmSize} dirty=${dirtyOutput}")
+                let (bufSize, llmSize) = outputBufferSizes()
+                let dirty = outputIsDirty()
+                ptyDebugLog("scheduled wait: round=${roundCount} raw=${bufSize} llm=${llmSize} dirty=${dirty}")
                 sleepMs(100)
                 continue
             }
 
-            // LLM 调用前：榨干 PTY 缓冲区，确保显示最新内容
-            drainPtyOutput(p)
-
             loopState = PtyLoopState.LLMDecision
             onEvent(AppEvent.PtyStateChange(loopState))
-            let bufSize2 = match (textBuf) { case Some(b) => b.size(); case None => 0 }
-            let llmSize2 = match (llmBuf) { case Some(b) => b.rawSize(); case None => 0 }
+            let (bufSize2, llmSize2) = outputBufferSizes()
             ptyDebugLog("→ LLM round ${roundCount + 1} raw=${bufSize2} llm=${llmSize2}")
 
             var toolResult: ?PtyTool = None
@@ -364,9 +366,6 @@ public class PtyAgentLoop {
                 result = collectResult(p)
                 continue
             }
-
-            // LLM 返回后：立即读取调用期间堆积的输出
-            drainPtyOutput(p)
 
             match (toolResult) {
                 case Some(tool) =>
@@ -410,6 +409,7 @@ public class PtyAgentLoop {
             }
         }
 
+        stopOutputReader()
         p.close()
         ptyDebugLog("=== PTY agentic end: exitCode=${result.exitCode} rounds=${roundCount} tokens=${totalInputTokens}+${totalOutputTokens} ===")
         ptyDebugClose()
@@ -418,31 +418,66 @@ public class PtyAgentLoop {
 
     // ── 内部方法 ──
 
-    /// 非阻塞榨干 PTY 输出缓冲区，确保显示最新内容，避免 LLM 调用期间终端"冻住"
-    private func drainPtyOutput(p: Pty): Unit {
-        var drained: Int64 = 0
-        var totalBytes: Int64 = 0
-        // 最多读 20 轮，避免子进程持续输出时死循环
-        while (drained < 20) {
-            let data = p.tryRead(65536)
-            if (data.size == 0) { break }
-            totalBytes += data.size
-            drained += 1
-            onEvent(AppEvent.PtyScreenUpdate(data))
-            detectPasswordEcho(data)
-            match (textBuf) {
-                case Some(buf) => buf.append(data)
-                case None => ()
-            }
-            match (llmBuf) {
-                case Some(buf) =>
-                    if (buf.append(data)) { markDirtyOutput() }
-                case None => ()
-            }
+    /// 独立输出 reader：持续读取 PTY、推送显示事件，并更新给 LLM 使用的缓冲区。
+    private func startOutputReader(p: Pty): Unit {
+        synchronized(outputMtx) {
+            outputReaderRunning = true
+            childExitedSeen = false
+            childExitCodeSeen = -1
         }
-        if (totalBytes > 0) {
-            ptyDebugLog("drainPtyOutput: ${drained} reads, ${totalBytes} bytes")
+        spawn { =>
+            ptyDebugLog("output reader started")
+            var running = true
+            while (running) {
+                var shouldStop = false
+                synchronized(outputMtx) {
+                    shouldStop = !outputReaderRunning
+                }
+                if (shouldStop) {
+                    running = false
+                    continue
+                }
+
+                var sawOutput = false
+                try {
+                    sawOutput = readAndProcessOutput(p)
+                } catch (e: Exception) {
+                    ptyDebugLog("output reader readAndProcessOutput threw: ${e.message}")
+                    sawOutput = false
+                }
+
+                let exited = p.childExited()
+                if (exited) {
+                    try {
+                        var drained = true
+                        while (drained) {
+                            drained = readAndProcessOutput(p)
+                        }
+                    } catch (e: Exception) {
+                        ptyDebugLog("output reader final drain threw: ${e.message}")
+                    }
+                    synchronized(outputMtx) {
+                        flushLlmOpenLineLocked()
+                        childExitCodeSeen = p.getExitCode()
+                        childExitedSeen = true
+                    }
+                    running = false
+                } else if (!sawOutput) {
+                    sleepMs(50)
+                }
+            }
+            synchronized(outputMtx) {
+                outputReaderRunning = false
+            }
+            ptyDebugLog("output reader stopped")
         }
+    }
+
+    private func stopOutputReader(): Unit {
+        synchronized(outputMtx) {
+            outputReaderRunning = false
+        }
+        sleepMs(60)
     }
 
     private func readAndProcessOutput(p: Pty): Bool {
@@ -454,25 +489,27 @@ public class PtyAgentLoop {
         // 先发送原始输出给 TUI（含 ANSI 转义序列，供 Cell→Span 渲染）
         onEvent(AppEvent.PtyScreenUpdate(data))
 
-        // 检测密码回显模式（在发送给 LLM 之前脱敏）
-        detectPasswordEcho(data)
+        synchronized(outputMtx) {
+            // 检测密码回显模式（在发送给 LLM 之前脱敏）
+            detectPasswordEchoLocked(data)
 
-        // 再更新本地文本缓冲区（供 LLM 上下文 + 节流用）
-        match (textBuf) {
-            case Some(buf) => buf.append(data)
-            case None => ()
-        }
-        match (llmBuf) {
-            case Some(buf) =>
-                if (buf.append(data)) {
-                    markDirtyOutput()
-                }
-            case None => ()
+            // 再更新本地文本缓冲区（供 LLM 上下文 + 节流用）
+            match (textBuf) {
+                case Some(buf) => buf.append(data)
+                case None => ()
+            }
+            match (llmBuf) {
+                case Some(buf) =>
+                    if (buf.append(data)) {
+                        markDirtyOutputLocked()
+                    }
+                case None => ()
+            }
         }
         true
     }
 
-    private func markDirtyOutput(): Unit {
+    private func markDirtyOutputLocked(): Unit {
         let now = monotonicMs()
         lastOutputAt = now
         if (!dirtyOutput) {
@@ -481,18 +518,18 @@ public class PtyAgentLoop {
         }
     }
 
-    private func flushLlmOpenLine(): Unit {
+    private func flushLlmOpenLineLocked(): Unit {
         match (llmBuf) {
             case Some(buf) =>
                 if (buf.finishOpenLine()) {
-                    markDirtyOutput()
+                    markDirtyOutputLocked()
                 }
             case None => ()
         }
     }
 
     /// 检测 PTY 输出中的密码回显模式，将匹配内容加入脱敏列表
-    private func detectPasswordEcho(data: String): Unit {
+    private func detectPasswordEchoLocked(data: String): Unit {
         // ANSI 转义序列剥离后的纯文本用于检测
         let plain = stripAnsiEscapes(data)
         let lines = plain.split("\n")
@@ -537,42 +574,72 @@ public class PtyAgentLoop {
         String.fromUtf8(result.toArray())
     }
 
-    private func shouldCallLlm(exited: Bool): Bool {
-        let now = monotonicMs()
-        if (!dirtyOutput && !exited) { return false }
-        if (now < nextEligibleAt && !exited) { return false }
-        if (lastDecisionAt > 0 && now - lastDecisionAt < minDecisionIntervalMs && !exited) {
-            return false
+    private func hasChildExited(): Bool {
+        synchronized(outputMtx) {
+            childExitedSeen
         }
-        if (!exited && lastOutputAt > 0 && now - lastOutputAt < quietWindowMs) {
-            if (firstDirtyOutputAt == 0 || now - firstDirtyOutputAt < maxWaitAfterOutputMs) {
+    }
+
+    private func getChildExitCode(): Int32 {
+        synchronized(outputMtx) {
+            childExitCodeSeen
+        }
+    }
+
+    private func outputBufferSizes(): (Int64, Int64) {
+        synchronized(outputMtx) {
+            let raw = match (textBuf) { case Some(b) => b.size(); case None => 0 }
+            let llm = match (llmBuf) { case Some(b) => b.rawSize(); case None => 0 }
+            (raw, llm)
+        }
+    }
+
+    private func outputIsDirty(): Bool {
+        synchronized(outputMtx) {
+            dirtyOutput
+        }
+    }
+
+    private func shouldCallLlm(exited: Bool): Bool {
+        synchronized(outputMtx) {
+            let now = monotonicMs()
+            if (!dirtyOutput && !exited) { return false }
+            if (now < nextEligibleAt && !exited) { return false }
+            if (lastDecisionAt > 0 && now - lastDecisionAt < minDecisionIntervalMs && !exited) {
                 return false
             }
+            if (!exited && lastOutputAt > 0 && now - lastOutputAt < quietWindowMs) {
+                if (firstDirtyOutputAt == 0 || now - firstDirtyOutputAt < maxWaitAfterOutputMs) {
+                    return false
+                }
+            }
+            match (llmBuf) {
+                case Some(buf) =>
+                    if (buf.currentOffset() == buf.sentOffset() && !buf.hasPreview() && !exited) { return false }
+                case None => if (!exited) { return false }
+            }
+            true
         }
-        match (llmBuf) {
-            case Some(buf) =>
-                if (buf.currentOffset() == buf.sentOffset() && !buf.hasPreview() && !exited) { return false }
-            case None => if (!exited) { return false }
-        }
-        true
     }
 
     private func nextDelayMs(): Int64 {
-        let now = monotonicMs()
-        var delay: Int64 = 100
-        if (nextEligibleAt > now) {
-            let d = nextEligibleAt - now
-            if (d > delay) { delay = d }
+        synchronized(outputMtx) {
+            let now = monotonicMs()
+            var delay: Int64 = 100
+            if (nextEligibleAt > now) {
+                let d = nextEligibleAt - now
+                if (d > delay) { delay = d }
+            }
+            if (lastDecisionAt > 0 && now - lastDecisionAt < minDecisionIntervalMs) {
+                let d = minDecisionIntervalMs - (now - lastDecisionAt)
+                if (d > delay) { delay = d }
+            }
+            if (lastOutputAt > 0 && now - lastOutputAt < quietWindowMs) {
+                let d = quietWindowMs - (now - lastOutputAt)
+                if (d > delay) { delay = d }
+            }
+            if (delay > 1000) { 1000 } else { delay }
         }
-        if (lastDecisionAt > 0 && now - lastDecisionAt < minDecisionIntervalMs) {
-            let d = minDecisionIntervalMs - (now - lastDecisionAt)
-            if (d > delay) { delay = d }
-        }
-        if (lastOutputAt > 0 && now - lastOutputAt < quietWindowMs) {
-            let d = quietWindowMs - (now - lastOutputAt)
-            if (d > delay) { delay = d }
-        }
-        if (delay > 1000) { 1000 } else { delay }
     }
 
     private func callLlmForDecision(): ?PtyTool {
@@ -588,14 +655,28 @@ public class PtyAgentLoop {
 
         for (msg in decisionHistory) { req.messages.add(msg) }
 
-        let snapshot = match (llmBuf) {
-            case Some(buf) => buf.snapshot()
-            case None => PtyLlmContextSnapshot("No compacted history.", "", "", 0, 0, 0)
+        var sentOffset: Int64 = 0
+        let snapshot = synchronized(outputMtx) {
+            let s = match (llmBuf) {
+                case Some(buf) =>
+                    sentOffset = buf.currentOffset()
+                    buf.snapshot()
+                case None =>
+                    sentOffset = 0
+                    PtyLlmContextSnapshot("No compacted history.", "", "", 0, 0, 0)
+            }
+            PtyLlmContextSnapshot(
+                redactSensitiveLocked(s.checkpoint),
+                redactSensitiveLocked(s.recent),
+                redactSensitiveLocked(s.delta),
+                s.contextBytes,
+                s.deltaBytes,
+                s.compactCount)
         }
         req.addUserMessage(buildPtyUserMessage(
-            redactSensitive(snapshot.checkpoint),
-            redactSensitive(snapshot.recent),
-            redactSensitive(snapshot.delta),
+            snapshot.checkpoint,
+            snapshot.recent,
+            snapshot.delta,
             roundCount,
             command))
 
@@ -609,12 +690,18 @@ public class PtyAgentLoop {
         inputTokens = resp.usage.inputTokens
         outputTokens = resp.usage.outputTokens
 
-        lastDecisionAt = now
-        dirtyOutput = false
-        firstDirtyOutputAt = 0
-        match (llmBuf) {
-            case Some(buf) => buf.markSent()
-            case None => ()
+        synchronized(outputMtx) {
+            lastDecisionAt = now
+            match (llmBuf) {
+                case Some(buf) => buf.markSentTo(sentOffset)
+                case None => ()
+            }
+            let hasUnsent = match (llmBuf) {
+                case Some(buf) => buf.currentOffset() != buf.sentOffset() || buf.hasPreview()
+                case None => false
+            }
+            dirtyOutput = hasUnsent
+            firstDirtyOutputAt = if (hasUnsent) { lastOutputAt } else { 0 }
         }
         roundCount += 1
         totalInputTokens += inputTokens
@@ -666,11 +753,14 @@ public class PtyAgentLoop {
     }
 
     private func collectResult(p: Pty): PtyResult {
+        let _ = p
         let result = PtyResult()
-        result.exitCode = p.getExitCode()
-        match (textBuf) {
-            case Some(buf) => result.output = buf.toPlainText()
-            case None => result.output = ""
+        synchronized(outputMtx) {
+            result.exitCode = childExitCodeSeen
+            match (textBuf) {
+                case Some(buf) => result.output = buf.toPlainText()
+                case None => result.output = ""
+            }
         }
         if (result.summary.size == 0) {
             result.summary = uiText("pty_command_finished")
@@ -733,9 +823,12 @@ public class PtyAgentLoop {
         if (action.startsWith("user_input:")) {
             let input = action["user_input:".size..]
             let _ = pty.getOrThrow().writeData(input + "\n")
-            let displayInput = if (sensitive) { "[REDACTED]" } else { input }
             addToolResultToHistory("{\"result\":\"user provided input\"}")
-            if (sensitive) { redactedPatterns.add(input) }
+            if (sensitive) {
+                synchronized(outputMtx) {
+                    redactedPatterns.add(input)
+                }
+            }
         } else if (action == "interrupt") {
             return false
         }
@@ -839,11 +932,8 @@ public class PtyAgentLoop {
                     case Some(p) => p.resize(rows, cols)
                     case None => ()
                 }
-                match (textBuf) {
-                    case Some(buf) =>
-                        ptyDebugLog("resize: ${rows}x${cols} buf_size=${buf.size()}")
-                    case None => ()
-                }
+                let (bufSize, _) = outputBufferSizes()
+                ptyDebugLog("resize: ${rows}x${cols} buf_size=${bufSize}")
             case None => ()
         }
     }
@@ -889,7 +979,7 @@ public class PtyAgentLoop {
 
     // ── 敏感内容脱敏 ──
 
-    private func redactSensitive(text: String): String {
+    private func redactSensitiveLocked(text: String): String {
         var result = text
         for (pattern in redactedPatterns) {
             result = replaceAll(result, pattern, "[PASSWORD_REDACTED]")

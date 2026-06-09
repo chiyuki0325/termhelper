@@ -120,6 +120,17 @@ public class PtyLlmContextBuffer {
         lastSentOffset = currentOffset()
     }
 
+    public func markSentTo(offset: Int64): Unit {
+        let current = currentOffset()
+        if (offset < baseOffset) {
+            lastSentOffset = baseOffset
+        } else if (offset > current) {
+            lastSentOffset = current
+        } else {
+            lastSentOffset = offset
+        }
+    }
+
     public func rawSize(): Int64 {
         normalized.size
     }
