@@ -72,14 +72,6 @@ public func uiTuiStartFailed(message: String): String {
     }
 }
 
-public func uiTuiDemoStartFailed(message: String): String {
-    if (isChinese()) {
-        "TUI 样式预览启动失败: ${message}"
-    } else {
-        "Failed to start TUI style demo: ${message}"
-    }
-}
-
 public func uiInstallFailed(message: String): String {
     if (isChinese()) {
         "安装 Shell 集成失败: ${message}"
@@ -294,7 +286,6 @@ func zhText(key: String): String {
         case "help_install" => "  termhelper --install          安装 Shell 集成 (alias/def 写入 RC 文件)"
         case "help_uninstall" => "  termhelper --uninstall        卸载 Shell 集成 (从 RC 文件移除)"
         case "help_debug" => "  termhelper --debug <查询>     CLI 调试模式，打印 LLMResponse JSON"
-        case "help_demo" => "  termhelper --tui-demo         展示彩色 TUI 样式预览"
         case "help_help" => "  termhelper --help             打印此帮助信息"
         case "help_examples" => "示例:"
         case "help_example_delete" => "  ?? 删除所有 std 开头的文件夹"
@@ -373,11 +364,6 @@ func zhText(key: String): String {
         case "screen_clarify" => "智能终端助手 » 澄清"
         case "screen_modify" => "智能终端助手 » 修改"
         case "screen_error" => "智能终端助手 » 错误"
-        case "style_demo_title" => "智能终端助手 » 样式预览"
-        case "style_demo_query" => "  列出 /tmp 里的文件"
-        case "style_demo_command" => "ls /tmp"
-        case "style_demo_summary" => "  摘要：列出临时目录中的文件和子目录。"
-        case "style_demo_warning" => "  不修改文件系统。"
         case "local_danger_warning" => "本地安全兜底检测到潜在破坏性命令，请逐项确认路径、通配符和递归参数。"
         case "local_privilege_warning" => "本地安全兜底检测到提权或系统级操作。"
         case "wl_copy_failed" => "wl-copy 执行失败"
@@ -460,7 +446,6 @@ func enText(key: String): String {
         case "help_install" => "  termhelper --install                 Install shell integration (alias/def in RC file)"
         case "help_uninstall" => "  termhelper --uninstall               Uninstall shell integration (remove from RC file)"
         case "help_debug" => "  termhelper --debug <query>           CLI debug mode; print LLMResponse JSON"
-        case "help_demo" => "  termhelper --tui-demo                Show the colorful TUI style preview"
         case "help_help" => "  termhelper --help                    Print this help"
         case "help_examples" => "Examples:"
         case "help_example_delete" => "  ?? delete all folders starting with std"
@@ -539,11 +524,6 @@ func enText(key: String): String {
         case "screen_clarify" => "Terminal Assistant » Clarify"
         case "screen_modify" => "Terminal Assistant » Modify"
         case "screen_error" => "Terminal Assistant » Error"
-        case "style_demo_title" => "Terminal Assistant » Style Preview"
-        case "style_demo_query" => "  List files in /tmp"
-        case "style_demo_command" => "ls /tmp"
-        case "style_demo_summary" => "  Summary: list files and subdirectories in the temporary directory."
-        case "style_demo_warning" => "  Does not modify the file system."
         case "local_danger_warning" => "Local safety fallback detected a potentially destructive command. Check paths, wildcards, and recursive arguments carefully."
         case "local_privilege_warning" => "Local safety fallback detected privilege escalation or system-level operations."
         case "wl_copy_failed" => "wl-copy failed"

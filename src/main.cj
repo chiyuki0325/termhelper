@@ -40,7 +40,6 @@ main(args: Array<String>): Int64 {
                     return 1
                 }
                 return runDebug(joinArgsFrom(args, 1))
-            case "--tui-demo" => return runTuiDemo()
             case "--help" =>
                 printHelp()
                 return 0
@@ -65,7 +64,6 @@ func printHelp(): Unit {
     println(uiText("help_install"))
     println(uiText("help_uninstall"))
     println(uiText("help_debug"))
-    println(uiText("help_demo"))
     println(uiText("help_help"))
     println()
     println(uiText("help_examples"))
@@ -285,15 +283,6 @@ func runQueryTui(query: String): Int64 {
             } else {
                 println(uiTuiStartFailed("${errorType}: ${details}"))
             }
-            1
-    }
-}
-
-func runTuiDemo(): Int64 {
-    match (runStyleDemo()) {
-        case Ok(_) => 0
-        case Err(e) =>
-            println(uiTuiDemoStartFailed(e.message))
             1
     }
 }

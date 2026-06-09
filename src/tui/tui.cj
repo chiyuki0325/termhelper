@@ -225,28 +225,6 @@ public func runMainLoop(terminal: Int64): Result<Unit, RatatuiException> {
     Result.Ok(())
 }
 
-public func runStyleDemo(): Result<Unit, RatatuiException> {
-    match (initTUI()) {
-        case Ok(terminal) =>
-            renderStyleDemo(terminal)
-            var running = true
-            while (running) {
-                match (pollEvent(100)) {
-                    case Some(eventHandle) =>
-                        let code = eventGetKeyCode(eventHandle)
-                        if (eventIsQuit(eventHandle) || code == 27 || code == 13 || code == 10) {
-                            running = false
-                        }
-                        eventFree(eventHandle)
-                    case None => ()
-                }
-            }
-            let _ = cleanupTUI(terminal)
-            Result.Ok(())
-        case Err(e) => Result.Err(e)
-    }
-}
-
 /// 清理 TUI，恢复终端模式
 public func cleanupTUI(terminal: Int64): Result<Unit, RatatuiException> {
     cleanupTerminal(terminal)
@@ -1625,53 +1603,6 @@ func styleSafety(level: SafetyLevel): RichStyle {
         case SafetyLevel.Danger => styleDanger()
         case SafetyLevel.Privilege => styleErrorText()
     }
-}
-
-func renderStyleDemo(terminal: Int64): Unit {
-    let _ = clearTerminalWidgets(terminal)
-    match (createBlockWidget(uiText("style_demo_title"))) {
-        case Ok(handle) =>
-            let _ = setWidgetPosition(handle, 0, 0)
-            let _ = setWidgetSize(handle, 0, 0)
-            let _ = addWidgetToTerminal(terminal, handle)
-        case Err(_) => ()
-    }
-
-    match (createRichTextWidget()) {
-        case Ok(handle) =>
-            richTextSpan(handle, uiText("result_title"), styleTitle())
-            richTextSpan(handle, "  " + uiText("mode_runnable"), styleSuccess())
-            richTextLine(handle)
-            richTextLine(handle)
-
-            richTextLine(handle, uiText("section_query"), styleSection())
-            richTextLine(handle, uiText("style_demo_query"), styleDefault())
-            richTextLine(handle)
-
-            richTextLine(handle, uiText("section_command"), styleSection())
-            richTextSpan(handle, "  $ ", styleMuted())
-            richTextLine(handle, uiText("style_demo_command"), styleCommand())
-            richTextLine(handle, uiText("style_demo_summary"), styleDefault())
-            richTextLine(handle)
-
-            richTextLine(handle, uiText("section_safety"), styleSection())
-            richTextSpan(handle, "  [+] " + uiText("safety_safe"), styleSuccess())
-            richTextLine(handle, uiText("style_demo_warning"), styleMuted())
-            richTextLine(handle)
-
-            richTextLine(handle, uiText("section_actions"), styleSection())
-            richTextLine(handle, "  > " + uiText("menu_run"), styleSelected())
-            richTextLine(handle, "    " + uiText("menu_copy"), styleDefault())
-            richTextLine(handle, "    " + uiText("menu_modify"), styleDefault())
-            richTextLine(handle)
-
-            richTextSpan(handle, uiText("keys_result"), styleMuted())
-            let _ = setWidgetPosition(handle, 2, 1)
-            let _ = setWidgetSize(handle, 0, 0)
-            let _ = addWidgetToTerminal(terminal, handle)
-        case Err(_) => ()
-    }
-    let _ = drawTerminal(terminal)
 }
 
 func screenTitle(state: TuiAppState): String {
