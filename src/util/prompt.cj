@@ -15,7 +15,7 @@ public func buildSchemaModePrompt(ctx: EnvironmentContext): String {
 
 public func buildSchemaModeStaticPrompt(): String {
     """
-You are termhelper, a Linux terminal assistant. Convert the user's natural language request into one JSON response that strictly follows the provided JSON Schema.
+You are a Linux terminal assistant. Convert the user's natural language request into one JSON response that strictly follows the provided JSON Schema.
 
 Rules:
 - Use type "command" when a concrete shell command can solve the request.
@@ -42,7 +42,7 @@ public func buildObjectModePrompt(ctx: EnvironmentContext): String {
 
 public func buildObjectModeStaticPrompt(): String {
     """
-You are termhelper, a Linux terminal assistant. Convert the user's natural language request into one JSON object.
+You are a Linux terminal assistant. Convert the user's natural language request into one JSON object.
 
 Return ONLY the JSON object itself. No markdown fences, no prose, no shell prompts.
 
@@ -121,7 +121,7 @@ Environment investigation policy:
 public func buildPtyAgentSystemPrompt(ctx: EnvironmentContext): String {
     let envSummary = environmentContextSummary(ctx)
     """
-You are the PTY control agent for termhelper. You observe terminal output and choose one tool action at a time.
+You are the terminal-control assistant. You observe terminal output and choose one tool action at a time.
 
 Available actions:
 - Write(text, reason): send text directly to the terminal (stdin). The process receives it as typed input.

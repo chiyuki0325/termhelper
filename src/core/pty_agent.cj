@@ -244,8 +244,9 @@ public class PtyAgentLoop {
             ptyDebugLog("PTY agent run() threw: ${e.message}")
             let result = PtyResult()
             result.exitCode = -1
-            result.summary = "PTY agent crashed: ${e.message}"
-            onEvent(AppEvent.PtyStateChange(PtyLoopState.Interrupted("Agent crashed: ${e.message}")))
+            let crash = "${uiText("terminal_takeover_crashed")}: ${e.message}"
+            result.summary = crash
+            onEvent(AppEvent.PtyStateChange(PtyLoopState.Interrupted(crash)))
             return result
         }
     }

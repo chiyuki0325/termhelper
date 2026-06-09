@@ -152,7 +152,7 @@ public func initTUI(): Result<Int64, RatatuiException> {
             "  TERM=${termType}  TERM_PROGRAM=${termProg}  COLORTERM=${colorTerm}\n" +
             "  WAYLAND_DISPLAY=${waylandDisplay}  DISPLAY=${displayVar}\n" +
             "  This application requires an interactive terminal emulator.\n" +
-            "  Are you piping or redirecting output? Try running directly: termhelper \"your query\""))
+            "  Are you piping or redirecting output? Try running it directly from an interactive terminal."))
     }
 
     // 调用 SDK 的 initTerminal()，附加环境信息到错误
