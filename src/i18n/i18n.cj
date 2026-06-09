@@ -80,6 +80,30 @@ public func uiTuiDemoStartFailed(message: String): String {
     }
 }
 
+public func uiInstallFailed(message: String): String {
+    if (isChinese()) {
+        "安装 Shell 集成失败: ${message}"
+    } else {
+        "Failed to install shell integration: ${message}"
+    }
+}
+
+public func uiUninstallFailed(message: String): String {
+    if (isChinese()) {
+        "卸载 Shell 集成失败: ${message}"
+    } else {
+        "Failed to uninstall shell integration: ${message}"
+    }
+}
+
+public func uiConfigDirRemoveFailed(path: String, message: String): String {
+    if (isChinese()) {
+        "删除配置目录失败: ${path}: ${message}"
+    } else {
+        "Failed to remove config directory: ${path}: ${message}"
+    }
+}
+
 public func uiConfigJsonParseFailed(path: String, message: String): String {
     if (isChinese()) {
         "配置文件 JSON 解析失败: ${path}: ${message}"
@@ -360,6 +384,7 @@ func zhText(key: String): String {
         case "xclip_failed" => "xclip 执行失败"
         case "install_wl_clipboard" => "请使用当前发行版的包管理器安装 wl-clipboard"
         case "install_xclip" => "请使用当前发行版的包管理器安装 xclip"
+        case "shell_detected" => "检测到 Shell:"
         case "shell_already_installed" => "termhelper 似乎已经安装过了"
         case "shell_installed_to" => "已安装 Shell 集成到"
         case "shell_source_hint" => "请运行: source"
@@ -368,6 +393,11 @@ func zhText(key: String): String {
         case "shell_marker_missing" => "未找到 termhelper 标记区块"
         case "shell_marker_corrupt" => "标记区块损坏，请手动检查"
         case "shell_uninstalled_from" => "已移除 termhelper Shell 集成:"
+        case "uninstall_delete_config_prompt" => "是否删除配置目录？"
+        case "config_dir_removed" => "已删除配置目录:"
+        case "config_dir_kept" => "已保留配置目录:"
+        case "config_dir_missing" => "配置目录不存在:"
+        case "config_dir_unsafe" => "配置目录路径未通过安全校验，已跳过删除:"
         case "screen_pty" => "智能终端助手 » PTY 接管"
         case "pty_create_failed" => "无法创建 PTY 设备"
         case "pty_spawn_failed" => "无法启动命令"
@@ -519,6 +549,7 @@ func enText(key: String): String {
         case "xclip_failed" => "xclip failed"
         case "install_wl_clipboard" => "Install wl-clipboard with this distribution's package manager"
         case "install_xclip" => "Install xclip with this distribution's package manager"
+        case "shell_detected" => "Detected shell:"
         case "shell_already_installed" => "termhelper appears to already be installed"
         case "shell_installed_to" => "Installed shell integration to"
         case "shell_source_hint" => "Run: source"
@@ -527,6 +558,11 @@ func enText(key: String): String {
         case "shell_marker_missing" => "termhelper marker block was not found"
         case "shell_marker_corrupt" => "Marker block is corrupt; check manually"
         case "shell_uninstalled_from" => "Removed termhelper shell integration from:"
+        case "uninstall_delete_config_prompt" => "Delete config directory?"
+        case "config_dir_removed" => "Removed config directory:"
+        case "config_dir_kept" => "Kept config directory:"
+        case "config_dir_missing" => "Config directory does not exist:"
+        case "config_dir_unsafe" => "Config directory path failed safety checks; skipped removal:"
         case "screen_pty" => "Terminal Assistant » PTY Agent"
         case "pty_create_failed" => "Failed to create PTY device"
         case "pty_spawn_failed" => "Failed to spawn command"

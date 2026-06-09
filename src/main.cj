@@ -7,6 +7,7 @@ import termhelper.core.*
 import termhelper.util.*
 import termhelper.i18n.*
 import std.collection.*
+import std.fs.*
 
 /// libc read(2) — 本地声明，用于从 stdin 读取
 foreign func read(fd: Int32, buf: CPointer<UInt8>, count: UInt64): Int64
@@ -30,11 +31,9 @@ main(args: Array<String>): Int64 {
     if (firstArg.startsWith("--")) {
         match (firstArg) {
             case "--install" =>
-                println(uiText("install_placeholder"))
-                return 0
+                return runInstall()
             case "--uninstall" =>
-                println(uiText("uninstall_placeholder"))
-                return 0
+                return runUninstall()
             case "--debug" =>
                 if (args.size < 2) {
                     println(uiText("usage_debug"))
@@ -111,6 +110,12 @@ func readLineFromStdin(): String {
     }
 }
 
+func promptYesNo(prompt: String): Bool {
+    print(prompt)
+    let answer = readLineFromStdin().trimAscii()
+    answer == "y" || answer == "Y" || answer == "yes" || answer == "YES"
+}
+
 /// 交互式 API Key 输入（无配置时调用）
 func promptApiKeyInteractive(): ?Config {
     println(uiText("api_key_welcome"))
@@ -139,6 +144,72 @@ func promptApiKeyInteractive(): ?Config {
 }
 
 // ── 主流程 ──
+
+func runInstall(): Int64 {
+    let shell = detectShell()
+    println("${uiText("shell_detected")} ${shell.name}")
+    try {
+        install(shell.rcPath, shell.name)
+        return 0
+    } catch (e: Exception) {
+        println(uiInstallFailed(e.message))
+        return 1
+    }
+}
+
+func runUninstall(): Int64 {
+    let shell = detectShell()
+    println("${uiText("shell_detected")} ${shell.name}")
+    try {
+        uninstall(shell.rcPath)
+    } catch (e: Exception) {
+        println(uiUninstallFailed(e.message))
+        return 1
+    }
+
+    let configDir = termhelperConfigDir()
+    if (!exists(Path(configDir))) {
+        println("${uiText("config_dir_missing")} ${configDir}")
+        return 0
+    }
+
+    if (!isSafeConfigDirPath(configDir)) {
+        println("${uiText("config_dir_unsafe")} ${configDir}")
+        return 0
+    }
+
+    if (promptYesNo("${uiText("uninstall_delete_config_prompt")} ${configDir} [y/N] ")) {
+        try {
+            remove(Path(configDir), recursive: true)
+            println("${uiText("config_dir_removed")} ${configDir}")
+        } catch (e: Exception) {
+            println(uiConfigDirRemoveFailed(configDir, e.message))
+            return 1
+        }
+    } else {
+        println("${uiText("config_dir_kept")} ${configDir}")
+    }
+    return 0
+}
+
+func isSafeConfigDirPath(path: String): Bool {
+    let trimmed = path.trimAscii()
+    if (trimmed.size == 0 || trimmed == "/" || trimmed == "." || trimmed == "..") {
+        return false
+    }
+    let home = envGetHome().trimAscii()
+    if (home.size > 0 && trimmed == home) {
+        return false
+    }
+    strEndsWith(trimmed, "/termhelper") || trimmed == "termhelper"
+}
+
+func strEndsWith(value: String, suffix: String): Bool {
+    if (suffix.size > value.size) {
+        return false
+    }
+    value[(value.size - suffix.size)..] == suffix
+}
 
 func runDebug(query: String): Int64 {
     enableDebugTrace()

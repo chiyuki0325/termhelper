@@ -53,6 +53,10 @@ public func install(rcPath: String, shell: String): Bool {
     }
 
     if (strContains(content, MARKER_START)) {
+        if (!strContains(content, MARKER_END)) {
+            println("${uiText("shell_marker_corrupt")} ${rcPath}")
+            return false
+        }
         println(uiText("shell_already_installed"))
         return false
     }
@@ -100,7 +104,22 @@ func shellReadFile(path: String): String {
 }
 
 func shellWriteFile(path: String, content: String): Unit {
+    ensureShellParentDir(path)
     try (f = File(Path(path), Write)) {
         f.write(content.toArray())
+    }
+}
+
+func ensureShellParentDir(filePath: String): Unit {
+    var lastSep: Int64 = -1
+    for (i in 0..filePath.size) {
+        if (filePath[i] == b'/') { lastSep = i }
+    }
+    if (lastSep > 0) {
+        let dirPath = filePath[0..lastSep]
+        let p = Path(dirPath)
+        if (!exists(p)) {
+            Directory.create(p, recursive: true)
+        }
     }
 }
