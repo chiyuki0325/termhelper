@@ -1,6 +1,5 @@
 package termhelper.tui.screens
 
-import ratatui.core.*
 import termhelper.types.*
 import termhelper.i18n.*
 import termhelper.tui.components.*
@@ -10,11 +9,6 @@ import std.collection.*
 // PTY Agentic 屏 — 阶段 6
 // 全屏 PTY Cell→Span 渲染为底层 + overlay 面板浮动在上层
 // ═══════════════════════════════════════════════════════════════
-
-// ── 本地颜色/修饰常量（styled_text.cj 中为包内私有）──
-let PTY_COLOR_DEFAULT: Int32 = 0
-let PTY_MOD_BOLD: Int32 = 1
-let PTY_MOD_UNDERLINED: Int32 = 8
 
 /// styled 版 PTY agentic 屏渲染（用于降级/纯文本场景）
 /// 注意：AnsiText widget 模式下，终端输出由 rendering 层独立处理，
@@ -30,6 +24,10 @@ public func styledPtyAgentic(
     userInput: String,
     sensitiveInput: Bool
 ): Unit {
+    let _ = rawBytes.size
+    let _ = scrollOffset
+    let _ = maxScroll
+
     // 标题行
     richTextSpan(handle, uiText("screen_pty"), styleTitle())
     let modeLabel = match (overlay.mode) {
@@ -39,7 +37,7 @@ public func styledPtyAgentic(
     richTextSpan(handle, "  ${uiText("overlay_mode")}: " + modeLabel, styleInfo())
     richTextSpan(handle, "  ${uiText("overlay_round")}: ${overlay.roundCount}/${overlay.maxRounds}", styleMuted())
     let statusLabel = ptyStateLabel(ptyState)
-    richTextSpan(handle, "  [" + statusLabel + "]", styleWarning())
+    richTextSpan(handle, "  [" + statusLabel + "]", ptyStatusStyle(ptyState))
     richTextLine(handle)
     richTextLine(handle)
 
@@ -97,7 +95,7 @@ public func styledPtyAgentic(
     // 键位提示
     richTextLine(handle)
     let keys = ptyKeysForState(ptyState)
-    richTextSpan(handle, keys, styleMuted())
+    richTextSpan(handle, keys, if (ptyState == "finished") { styleSuccess() } else { styleMuted() })
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -164,8 +162,17 @@ func ptyKeysForState(state: String): String {
         case "awaiting_confirm" => uiText("keys_pty_awaiting_confirm")
         case "awaiting_input" => uiText("keys_pty_awaiting_input")
         case "round_limit" => uiText("keys_pty_round_limit")
-        case "finished" | "interrupted" => uiText("keys_exit")
+        case "finished" => uiText("keys_pty_done")
+        case "interrupted" => uiText("keys_pty_interrupted")
         case _ => uiText("keys_pty_default")
+    }
+}
+
+func ptyStatusStyle(state: String): RichStyle {
+    match (state) {
+        case "finished" => styleSuccess()
+        case "interrupted" => styleErrorText()
+        case _ => styleWarning()
     }
 }
 

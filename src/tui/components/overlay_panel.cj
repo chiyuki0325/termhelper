@@ -13,6 +13,7 @@ import termhelper.i18n.*
 public func renderOverlayPanel(data: PtyOverlayData): String {
     var out = uiText("overlay_title") + "\n"
     out += "${uiText("overlay_mode")}: ${ptyModeText(data.mode)}  ${uiText("overlay_round")}: ${data.roundCount}/${data.maxRounds}\n"
+    out += "${uiText("pty_tokens_used")}: ${formatTokenUsage(data.tokenInput, data.tokenOutput)}\n"
     match (data.llmDecision) {
         case Some(v) => out += "${uiText("overlay_decision")}: ${v}\n"
         case None => ()
@@ -38,7 +39,7 @@ public func styledOverlayPanel(handle: Int64, data: PtyOverlayData, state: Strin
     let statusText = ptyStatusLabel(state)
     var infoLine = "  ${uiText("overlay_mode")}: ${modeText}"
     infoLine += "  ${uiText("overlay_round")}: ${data.roundCount}/${data.maxRounds}"
-    infoLine += "  ${uiText("pty_tokens_used")}: ${tokenInput}+${tokenOutput}"
+    infoLine += "  ${uiText("pty_tokens_used")}: ${formatTokenUsage(tokenInput, tokenOutput)}"
     infoLine += "  [${statusText}]"
     richTextLine(handle, infoLine, styleMuted())
 
@@ -87,5 +88,29 @@ func ptyStatusLabel(state: String): String {
         case "finished" => uiText("pty_status_finished")
         case "interrupted" => uiText("pty_status_interrupted")
         case _ => state
+    }
+}
+
+public func formatTokenUsage(input: Int64, output: Int64): String {
+    "${formatTokenCount(input)}+${formatTokenCount(output)}"
+}
+
+public func formatTokenCount(value: Int64): String {
+    if (value < 1000) {
+        return "${value}"
+    }
+    if (value < 1000000) {
+        return formatCompactToken(value, 1000, "K")
+    }
+    formatCompactToken(value, 1000000, "M")
+}
+
+func formatCompactToken(value: Int64, unit: Int64, suffix: String): String {
+    let whole = value / unit
+    let tenth = (value % unit) * 10 / unit
+    if (tenth == 0 || whole >= 100) {
+        "${whole}${suffix}"
+    } else {
+        "${whole}.${tenth}${suffix}"
     }
 }

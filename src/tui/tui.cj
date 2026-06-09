@@ -313,6 +313,12 @@ func handleAppEvent(state: TuiAppState, session: Session, event: AppEvent): Unit
         case AppEvent.PtyStateChange(loopState) =>
             handlePtyStateChange(state, loopState)
         case AppEvent.PtyOverlayUpdate(data) =>
+            if (data.tokenInput == 0 && state.ptyOverlay.tokenInput > 0) {
+                data.tokenInput = state.ptyOverlay.tokenInput
+            }
+            if (data.tokenOutput == 0 && state.ptyOverlay.tokenOutput > 0) {
+                data.tokenOutput = state.ptyOverlay.tokenOutput
+            }
             state.ptyOverlay = data
             state.ptyTokenInput = data.tokenInput
             state.ptyTokenOutput = data.tokenOutput
@@ -595,8 +601,14 @@ func computePtyOverlayRows(height: Int64, ptyState: String): Int64 {
     } else {
         0
     }
-    // awaiting_input 需要额外行（输入提示 + 输入框 + 按钮 = 3 行）
-    if (ptyState == "awaiting_input") { base + 3 } else { base }
+    // awaiting_input 需要额外行；完成/中断态需要保留底部退出提示。
+    if (ptyState == "awaiting_input") {
+        base + 3
+    } else if (ptyState == "finished" || ptyState == "interrupted") {
+        base + 1
+    } else {
+        base
+    }
 }
 
 func computePtyOverlayRows(height: Int64): Int64 {
@@ -1149,9 +1161,10 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
     let statusLabel = ptyStatusText(ptyState)
     var infoLine = "  ${uiText("overlay_mode")}: ${modeLabel}"
     infoLine += "  ${uiText("overlay_round")}: ${data.roundCount}/${data.maxRounds}"
-    infoLine += "  ${uiText("pty_tokens_used")}: ${data.tokenInput}+${data.tokenOutput}"
-    infoLine += "  [${statusLabel}]"
-    richTextLine(handle, infoLine, styleMuted())
+    infoLine += "  ${uiText("pty_tokens_used")}: ${formatTokenUsage(data.tokenInput, data.tokenOutput)}"
+    richTextSpan(handle, infoLine + "  ", styleMuted())
+    richTextSpan(handle, "[${statusLabel}]", ptyStatusStyle(ptyState))
+    richTextLine(handle)
 
     // LLM 决策信息
     match (data.llmDecision) {
@@ -1194,6 +1207,10 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
         // 按钮 — 用户回答直接送入终端
         richTextSpan(handle, "  [Enter]${uiText("pty_send_to_terminal")} ", styleSuccess())
         richTextSpan(handle, "[Esc]${uiText("pty_cancel")}", styleErrorText())
+    } else if (ptyState == "finished") {
+        richTextLine(handle, "  " + uiText("keys_pty_done"), styleSuccess())
+    } else if (ptyState == "interrupted") {
+        richTextLine(handle, "  " + uiText("keys_pty_interrupted"), styleErrorText())
     }
 }
 
@@ -1214,6 +1231,14 @@ func ptyStatusText(ptyState: String): String {
         case "finished" => uiText("pty_status_finished")
         case "interrupted" => uiText("pty_status_interrupted")
         case _ => ptyState
+    }
+}
+
+func ptyStatusStyle(ptyState: String): RichStyle {
+    match (ptyState) {
+        case "finished" => styleSuccess()
+        case "interrupted" => styleErrorText()
+        case _ => styleWarning()
     }
 }
 
