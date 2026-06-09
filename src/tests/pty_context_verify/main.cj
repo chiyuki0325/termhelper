@@ -70,6 +70,13 @@ func testOpenPromptPreview(): Bool {
     expectContains("open prompt visible", snap.delta, "password for user:")
 }
 
+func testInvalidUtf8DoesNotCrash(): Bool {
+    println("── 测试 6：多字节字符被行覆盖时不崩溃 ──")
+    let normalizer = TerminalTextNormalizer()
+    let out = normalizer.feed("中\rA\n")
+    expectContains("overwritten utf8 line kept", out, "latest: A")
+}
+
 main(): Int64 {
     var ok = true
     ok = testCarriageReturnProgress() && ok
@@ -77,6 +84,7 @@ main(): Int64 {
     ok = testAnsiZeroGProgress() && ok
     ok = testCompactBuffer() && ok
     ok = testOpenPromptPreview() && ok
+    ok = testInvalidUtf8DoesNotCrash() && ok
     if (ok) {
         println("PTY context verify: PASS")
         return 0

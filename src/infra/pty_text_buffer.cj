@@ -219,7 +219,7 @@ public class TerminalTextNormalizer {
         output.clear()
         let bytes = data.toArray()
         for (b in bytes) { processByte(b) }
-        String.fromUtf8(output.toArray())
+        safeUtf8(output.toArray())
     }
 
     public func flush(): String {
@@ -227,11 +227,11 @@ public class TerminalTextNormalizer {
         if (line.size > 0 || progressUpdateCount > 0) {
             commitLine()
         }
-        String.fromUtf8(output.toArray())
+        safeUtf8(output.toArray())
     }
 
     public func preview(): String {
-        let text = trimRightAscii(String.fromUtf8(line.toArray()))
+        let text = trimRightAscii(safeUtf8(line.toArray()))
         if (text.size == 0) { return "" }
         if (lineWasOverwritten || progressUpdateCount > 1) {
             "[current progress latest: ${text}]"
@@ -266,27 +266,41 @@ public class TerminalTextNormalizer {
             progressUpdateCount += 1
             lineWasOverwritten = true
         } else if (b == b'\t') {
-            writeByte(b' ')
-            writeByte(b' ')
-            writeByte(b' ')
-            writeByte(b' ')
+            writeUtf8Byte(b' ')
+            writeUtf8Byte(b' ')
+            writeUtf8Byte(b' ')
+            writeUtf8Byte(b' ')
         } else if (b >= 32) {
-            writeByte(b)
+            writeUtf8Byte(b)
         }
     }
 
-    private func writeByte(b: UInt8): Unit {
+    private func writeUtf8Byte(b: UInt8): Unit {
+        let advanceCursor = !isUtf8Continuation(b)
         while (line.size < cursorCol) { line.add(b' ') }
-        if (cursorCol < line.size) {
-            line[cursorCol] = b
+        if (advanceCursor && cursorCol < line.size && utf8SequenceLength(line[cursorCol]) > 0) {
+            removeUtf8SequenceAtCursor()
+        }
+        if (advanceCursor) {
+            if (cursorCol < line.size) {
+                line[cursorCol] = b
+            } else {
+                line.add(b)
+            }
+            cursorCol += 1
         } else {
             line.add(b)
         }
-        cursorCol += 1
+    }
+
+    private func removeUtf8SequenceAtCursor(): Unit {
+        while (cursorCol + 1 < line.size && isUtf8Continuation(line[cursorCol + 1])) {
+            line.remove(at: cursorCol + 1)
+        }
     }
 
     private func commitLine(): Unit {
-        let text = trimRightAscii(String.fromUtf8(line.toArray()))
+        let text = trimRightAscii(safeUtf8(line.toArray()))
         if (text.size > 0) {
             if (lineWasOverwritten || progressUpdateCount > 1) {
                 appendOutput("[progress updated ${progressUpdateCount} times, latest: ${text}]\n")
@@ -377,7 +391,7 @@ func stripAnsiEscapes(bytes: Array<UInt8>): String {
             i += 1
         }
     }
-    String.fromUtf8(result.toArray())
+    safeUtf8(result.toArray())
 }
 
 func isAnsiFinalByte(b: UInt8): Bool {
@@ -413,7 +427,7 @@ func bytesRange(bytes: ArrayList<UInt8>, start: Int64, end: Int64): ArrayList<UI
 }
 
 func bytesRangeToString(bytes: ArrayList<UInt8>, start: Int64, end: Int64): String {
-    String.fromUtf8(bytesRange(bytes, start, end).toArray())
+    safeUtf8(bytesRange(bytes, start, end).toArray())
 }
 
 func tailString(bytes: ArrayList<UInt8>, maxBytes: Int64): String {
@@ -425,6 +439,62 @@ func appendPreview(text: String, preview: String): String {
     if (preview.size == 0) { return text }
     if (text.size == 0) { return preview }
     text + "\n" + preview
+}
+
+func safeUtf8(bytes: Array<UInt8>): String {
+    let result = ArrayList<UInt8>()
+    var i: Int64 = 0
+    while (i < bytes.size) {
+        let b = bytes[i]
+        if (b < 0x80) {
+            result.add(b)
+            i += 1
+        } else {
+            let len = utf8SequenceLength(b)
+            if (len == 0 || i + len > bytes.size) {
+                appendReplacementRune(result)
+                i += 1
+            } else {
+                var valid = true
+                for (j in 1..len) {
+                    if (!isUtf8Continuation(bytes[i + j])) {
+                        valid = false
+                        break
+                    }
+                }
+                if (valid) {
+                    for (j in 0..len) { result.add(bytes[i + j]) }
+                    i += len
+                } else {
+                    appendReplacementRune(result)
+                    i += 1
+                }
+            }
+        }
+    }
+    String.fromUtf8(result.toArray())
+}
+
+func utf8SequenceLength(b: UInt8): Int64 {
+    if (b >= 0xC2 && b <= 0xDF) {
+        2
+    } else if (b >= 0xE0 && b <= 0xEF) {
+        3
+    } else if (b >= 0xF0 && b <= 0xF4) {
+        4
+    } else {
+        0
+    }
+}
+
+func isUtf8Continuation(b: UInt8): Bool {
+    b >= 0x80 && b <= 0xBF
+}
+
+func appendReplacementRune(result: ArrayList<UInt8>): Unit {
+    result.add(0xEF)
+    result.add(0xBF)
+    result.add(0xBD)
 }
 
 func trimRightAscii(text: String): String {
