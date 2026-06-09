@@ -96,8 +96,8 @@ func ptyToolDefinitions(): ArrayList<ToolDefinition> {
     ))
     tools.add(ToolDefinition(
         "Wait",
-        "Wait for the terminal output to settle before deciding the next action.",
-        "{\"type\":\"object\",\"properties\":{\"milliseconds\":{\"type\":\"integer\",\"description\":\"Duration in ms (500-30000)\"}},\"required\":[\"milliseconds\"]}"
+        "Sleep before reading more terminal output and deciding the next action. Use this aggressively for downloads, installs, builds, tests, progress bars, and other long-running work to avoid wasting tokens on repeated observations.",
+        "{\"type\":\"object\",\"properties\":{\"seconds\":{\"type\":\"integer\",\"description\":\"How many seconds to sleep before checking output again. Use 5-30 for short progress updates, 60+ for clearly long-running operations.\"}},\"required\":[\"seconds\"]}"
     ))
     tools.add(ToolDefinition(
         "Exit",
@@ -773,8 +773,8 @@ public class PtyAgentLoop {
         match (tool) {
             case PtyTool.Write(content, reason) => executeWrite(p, content, reason)
             case PtyTool.AskUser(question, sensitive) => executeAskUser(question, sensitive)
-            case PtyTool.Wait(ms) =>
-                executeWait(ms)
+            case PtyTool.Wait(seconds) =>
+                executeWait(seconds)
                 true
             case PtyTool.Exit(summary) => false
             case PtyTool.Interrupt(reason) =>
@@ -836,12 +836,13 @@ public class PtyAgentLoop {
         true
     }
 
-    private func executeWait(ms: Int64): Unit {
-        let clamped = if (ms < 500) { 500 } else if (ms > 30000) { 30000 } else { ms }
-        loopState = PtyLoopState.Throttled(clamped)
+    private func executeWait(seconds: Int64): Unit {
+        let waitSeconds = if (seconds < 1) { 1 } else { seconds }
+        let waitMs = waitSeconds * 1000
+        loopState = PtyLoopState.Throttled(waitMs)
         onEvent(AppEvent.PtyStateChange(loopState))
-        nextEligibleAt = monotonicMs() + clamped
-        addToolResultToHistory("{\"result\":\"waited ${clamped}ms\"}")
+        nextEligibleAt = monotonicMs() + waitMs
+        addToolResultToHistory("{\"result\":\"waited ${waitSeconds}s\"}")
     }
 
     // ── Tool result 消息辅助 ──
@@ -1038,7 +1039,8 @@ ${delta}
 Choose the next action based on the terminal output above. The output is normalized: carriage-return and ANSI progress bars are compressed to their latest visible state.
 - If the program is prompting for input, use Write to provide it.
 - If you need information from the user (password, choice), use AskUser.
-- If the output is still updating, use Wait.
+- If the output is still updating, use Wait with seconds.
+- For downloads, package installs/upgrades, builds, test suites, and progress bars, prefer Wait over repeated inspection. Pick a longer wait when progress is slow or no input is needed.
 - If the command has finished, use Exit with a summary.
 - If something is wrong (unexpected prompt, error, stuck), use Interrupt.
 """
@@ -1050,7 +1052,7 @@ func parsePtyTool(name: String, argsJson: String): ?PtyTool {
     } else if (name == "AskUser") {
         Some(PtyTool.AskUser(extractJsonString(argsJson, "question"), extractJsonBool(argsJson, "sensitive")))
     } else if (name == "Wait") {
-        Some(PtyTool.Wait(extractJsonInt(argsJson, "milliseconds")))
+        Some(PtyTool.Wait(extractWaitSeconds(argsJson)))
     } else if (name == "Exit") {
         Some(PtyTool.Exit(extractJsonString(argsJson, "summary")))
     } else if (name == "Interrupt") {
@@ -1132,6 +1134,23 @@ func extractJsonInt(json: String, key: String): Int64 {
         return 1000
     }
     parseJsonInt64(s)
+}
+
+func extractWaitSeconds(json: String): Int64 {
+    let secondsPattern = "\"seconds\""
+    if (findSubstring(json, secondsPattern) >= 0) {
+        return extractJsonInt(json, "seconds")
+    }
+
+    let millisecondsPattern = "\"milliseconds\""
+    if (findSubstring(json, millisecondsPattern) >= 0) {
+        let ms = extractJsonInt(json, "milliseconds")
+        if (ms <= 0) { return 1 }
+        let rounded = (ms + 999) / 1000
+        return if (rounded < 1) { 1 } else { rounded }
+    }
+
+    1
 }
 
 func findSubstring(text: String, pattern: String): Int64 {
