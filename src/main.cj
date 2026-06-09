@@ -198,7 +198,22 @@ func runQueryTui(query: String): Int64 {
     match (runApp(query, session, config)) {
         case Ok(_) => 0
         case Err(e) =>
-            println(uiTuiStartFailed(e.message))
+            let errorType = e.errorType
+            let details = e.details
+            // 对 FFI_ERROR 类型附加诊断建议
+            if (errorType == "FFI_ERROR") {
+                eprintln("[termhelper] FFI_ERROR details: ${details}")
+                println(uiTuiStartFailed(
+                    "${details}\n" +
+                    "  This is an FFI (Foreign Function Interface) error.\n" +
+                    "  Possible causes:\n" +
+                    "    1. libcangjie_tui.so is missing or outdated — run: bash scripts/setup-deps.sh\n" +
+                    "    2. Cangjie SDK .so files are out of sync — run: cjpm build --force\n" +
+                    "    3. A foreign function symbol could not be found in the shared library\n" +
+                    "  Error type: ${errorType}"))
+            } else {
+                println(uiTuiStartFailed("${errorType}: ${details}"))
+            }
             1
     }
 }

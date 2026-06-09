@@ -11,6 +11,9 @@ import termhelper.adapters.*
 import std.collection.*
 import std.sync.*
 
+// ── 本地 FFI 声明（仅此文件使用）──
+foreign func isatty(fd: Int32): Int32
+
 public class AppEventQueue {
     private let mtx: Mutex
     private let events: ArrayList<AppEvent>
@@ -127,8 +130,53 @@ class TuiAppState {
 }
 
 /// 初始化 TUI，进入 alternate screen + raw mode
+/// 在调用 SDK 的 initTerminal() 之前做预检，失败时提供详细诊断信息
 public func initTUI(): Result<Int64, RatatuiException> {
-    initTerminal()
+    // ── 预检：收集环境信息用于诊断 ──
+    let termType = try { getEnvOr("TERM", "(not set)") } catch (_: Exception) { "(error)" }
+    let termProg = try { getEnvOr("TERM_PROGRAM", "(not set)") } catch (_: Exception) { "(error)" }
+    let colorTerm = try { getEnvOr("COLORTERM", "(not set)") } catch (_: Exception) { "(error)" }
+    let waylandDisplay = try { getEnvOr("WAYLAND_DISPLAY", "(not set)") } catch (_: Exception) { "(error)" }
+    let displayVar = try { getEnvOr("DISPLAY", "(not set)") } catch (_: Exception) { "(error)" }
+
+    // 检查是否为 TTY
+    let stdoutIsTTY = try {
+        let result = unsafe { isatty(1) }
+        result != 0
+    } catch (_: Exception) { false }
+
+    if (!stdoutIsTTY) {
+        return Result.Err(RatatuiException.initError(
+            "Terminal initialization aborted: stdout is not a TTY (terminal).\n" +
+            "  isatty(1) = false\n" +
+            "  TERM=${termType}  TERM_PROGRAM=${termProg}  COLORTERM=${colorTerm}\n" +
+            "  WAYLAND_DISPLAY=${waylandDisplay}  DISPLAY=${displayVar}\n" +
+            "  This application requires an interactive terminal emulator.\n" +
+            "  Are you piping or redirecting output? Try running directly: termhelper \"your query\""))
+    }
+
+    // 调用 SDK 的 initTerminal()，附加环境信息到错误
+    match (initTerminal()) {
+        case Ok(terminal) =>
+            Result.Ok(terminal)
+        case Err(e) =>
+            // 在已有错误信息基础上附加完整环境快照
+            let enrichedMsg = "${e.details}\n" +
+                "  Environment snapshot: TERM=${termType}  TERM_PROGRAM=${termProg}  COLORTERM=${colorTerm}\n" +
+                "  WAYLAND_DISPLAY=${waylandDisplay}  DISPLAY=${displayVar}\n" +
+                "  isatty(1)=${if(stdoutIsTTY) { "true" } else { "false" }}\n" +
+                "  If the error mentions a missing symbol or FFI_ERROR, the Rust FFI library (libcangjie_tui.so)\n" +
+                "  may be out of sync with the Cangjie SDK. Try: bash scripts/setup-deps.sh && cjpm build"
+            Result.Err(RatatuiException(e.errorType, enrichedMsg))
+    }
+}
+
+/// 安全获取环境变量，异常时返回默认值
+private func getEnvOr(name: String, defaultVal: String): String {
+    match (envGet(name)) {
+        case Some(v) => v
+        case None => defaultVal
+    }
 }
 
 /// 阶段 5 主流程入口。
@@ -141,11 +189,18 @@ public func runApp(query: String, session: Session, config: Config): Result<Unit
             var loopResult: Result<Unit, RatatuiException> = Result.Ok(())
             try {
                 loopResult = runLoop(terminal, state, session, config)
+            } catch (e: RatatuiException) {
+                // 保留完整错误信息并附加运行时上下文
+                cleanupActiveSpawn(state)
+                eprintln("[termhelper] RatatuiException in runLoop: ${e.errorType}: ${e.details}")
+                loopResult = Result.Err(RatatuiException(e.errorType,
+                    "TUI runLoop crashed at screen='${state.screen}': ${e.details}"))
             } catch (e: Exception) {
                 // 异常时确保清理：恢复终端模式 + 退出 alternate screen + 清理 PTY
                 cleanupActiveSpawn(state)
-                eprintln("[termhelper] error: ${e.message}")
-                loopResult = Result.Err(RatatuiException.ffiError(e.message))
+                eprintln("[termhelper] Unhandled exception in runLoop at screen='${state.screen}': ${e.message}")
+                loopResult = Result.Err(RatatuiException.ffiError(
+                    "TUI runLoop crashed at screen='${state.screen}': ${e.message}"))
             }
             let _ = cleanupTUI(terminal)
             loopResult
