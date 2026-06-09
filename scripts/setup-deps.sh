@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 NAIVEJSON_URL="https://gitcode.com/zhangyin_gitcode/naivejson_wp.git"
-RATATUI_URL="https://gitcode.com/Cangjie-SIG/ratatui/"
+RATATUI_URL="https://gitcode.com/chiyuki0325/ratatui"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -14,69 +14,52 @@ log_info()  { echo -e "${GREEN}==>${NC} $*"; }
 log_warn()  { echo -e "${YELLOW}    warning:${NC} $*"; }
 log_error() { echo -e "${RED}    error:${NC} $*"; }
 
+clone_dependency() {
+    local name="$1"
+    local url="$2"
+    local dir="$3"
+
+    if [ ! -d "$dir" ]; then
+        log_info "Cloning ${name} from ${url}..."
+        git clone --depth 1 "$url" "$dir"
+        log_info "${name}: cloned (rev $(git -C "$dir" rev-parse --short HEAD))"
+    else
+        log_info "${name}: already exists, skipping"
+    fi
+}
+
 echo "==> Setting up thirdparty dependencies..."
 
 # ── naivejson ──
 NAIVEJSON_DIR="thirdparty/naivejson"
-if [ ! -d "$NAIVEJSON_DIR" ]; then
-    log_info "Cloning naivejson from ${NAIVEJSON_URL}..."
-    if git clone --depth 1 "$NAIVEJSON_URL" "$NAIVEJSON_DIR" 2>/dev/null; then
-        log_info "naivejson: cloned (rev $(git -C "$NAIVEJSON_DIR" rev-parse --short HEAD))"
-    else
-        log_warn "git clone failed, falling back to local reference"
-        cp -a references/naivejson_wp "$NAIVEJSON_DIR"
-        log_info "naivejson: copied from references/"
-    fi
-else
-    log_info "naivejson: already exists, skipping"
-fi
+clone_dependency "naivejson" "$NAIVEJSON_URL" "$NAIVEJSON_DIR"
 
 # ── ratatui ──
 RATATUI_DIR="thirdparty/ratatui"
 RATATUI_FFI_DIR="$RATATUI_DIR/cangjie-tui-ffi"
-PATCHES_DIR="patches"
 
-if [ ! -d "$RATATUI_DIR" ]; then
-    log_info "Cloning ratatui from ${RATATUI_URL}..."
-    if git clone --depth 1 "$RATATUI_URL" "$RATATUI_DIR" 2>/dev/null; then
-        log_info "ratatui: cloned (rev $(git -C "$RATATUI_DIR" rev-parse --short HEAD))"
-
-        # Apply patches
-        if [ -d "$PATCHES_DIR" ]; then
-            shopt -s nullglob
-            for patch in "$PATCHES_DIR"/*.patch; do
-                log_info "Applying $(basename "$patch")..."
-                if ! (cd "$RATATUI_DIR" && patch -p1 < "../..//$patch"); then
-                    log_warn "$(basename "$patch") may already be applied"
-                fi
-            done
-            shopt -u nullglob
-        fi
-
-        # Ensure cjpm.toml link-option uses relative path (patch sets absolute)
-        SDK_TOML="$RATATUI_DIR/cangjie-ratatui-sdk/cjpm.toml"
-        if [ -f "$SDK_TOML" ]; then
-            # Replace any absolute -L path pointing to cangjie-tui-ffi with a relative one
-            sed -i 's|-L[^ ]*cangjie-tui-ffi/target/release|-L../../thirdparty/ratatui/cangjie-tui-ffi/target/release|g' "$SDK_TOML"
-        fi
-    else
-        log_warn "git clone failed, falling back to local reference"
-        cp -a references/ratatui "$RATATUI_DIR"
-
-        # Apply patches for local copy too
-        if [ -d "$PATCHES_DIR" ]; then
-            shopt -s nullglob
-            for patch in "$PATCHES_DIR"/*.patch; do
-                log_info "Applying $(basename "$patch")..."
-                (cd "$RATATUI_DIR" && patch -p1 < "../..//$patch") 2>/dev/null || \
-                    log_warn "$(basename "$patch") may already be applied"
-            done
-            shopt -u nullglob
-        fi
+clean_stale_ratatui_dynamic_artifacts() {
+    # Avoid stale dynamic SDK artifacts winning over freshly built .a files.
+    if [ -d "target/release/ratatui" ]; then
+        find "target/release/ratatui" -maxdepth 1 -type f -name '*.so' -delete
     fi
-else
-    log_info "ratatui: already exists, skipping"
-fi
+}
+
+patch_ratatui_sdk_link_path() {
+    local sdk_toml="$RATATUI_DIR/cangjie-ratatui-sdk/cjpm.toml"
+    local ffi_abs_path
+    ffi_abs_path="$(pwd)/$RATATUI_FFI_DIR/target/release"
+
+    if [ -f "$sdk_toml" ]; then
+        sed -i "s|-L[^ ]*cangjie-tui-ffi/target/release|-L${ffi_abs_path}|g" "$sdk_toml"
+        log_info "ratatui SDK: patched FFI link path to ${ffi_abs_path}"
+    fi
+}
+
+clone_dependency "ratatui" "$RATATUI_URL" "$RATATUI_DIR"
+
+patch_ratatui_sdk_link_path
+clean_stale_ratatui_dynamic_artifacts
 
 # ── Build Rust FFI ──
 log_info "Building ratatui Rust FFI..."

@@ -4,8 +4,8 @@
   description = "Linux 终端智能助手 — 自然语言驱动 Shell 操作"
   version = "0.1.0"
   output-type = "executable"
-  compile-option = ""
-  link-option = "-L/home/chiyuki/Projects/termhelper/thirdparty/ratatui/cangjie-tui-ffi/target/release -lcangjie_tui"
+  compile-option = "--static -Woff driver-arg -ldl"
+  link-option = "-L/home/chiyuki/Projects/termhelper/thirdparty/ratatui/cangjie-tui-ffi/target/release -l:libcangjie_tui.a -lgcc_s -lutil -lrt -lpthread -lm -ldl -lc"
 
 [dependencies]
   ratatui = { path = "thirdparty/ratatui/cangjie-ratatui-sdk" }
@@ -13,7 +13,7 @@
 
 [target.aarch64-unknown-linux-gnu]
   [target.aarch64-unknown-linux-gnu.bin-dependencies]
-    path-option = ["/home/chiyuki/Documents/Apps/cangjie/stdx/dynamic/stdx"]
+    path-option = ["/home/chiyuki/Documents/Apps/cangjie/stdx/static/stdx"]
 
 # ── 阶段 1 验证测试程序 ──
 

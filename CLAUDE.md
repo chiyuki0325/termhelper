@@ -21,7 +21,7 @@ cjpm build
 
 # 3. 运行（需要设置 API Key）
 export LLM_API_KEY="sk-xxx"
-bash scripts/run.sh "删除所有 tmp 开头的文件夹"
+./target/release/bin/termhelper "删除所有 tmp 开头的文件夹"
 ```
 
 ### 日常开发
@@ -29,13 +29,13 @@ bash scripts/run.sh "删除所有 tmp 开头的文件夹"
 ```bash
 cjpm build                          # 编译（输出到 target/release/bin/termhelper）
 cjpm build --verbose                # 查看完整编译命令
-bash scripts/run.sh "查询内容"       # 构建后运行
-bash scripts/run.sh --help          # 查看帮助
-bash scripts/run.sh --tui-demo      # 彩色样式预览
-bash scripts/run.sh --debug "查询"  # CLI 调试模式，打印 LLMResponse JSON
+./target/release/bin/termhelper "查询内容"       # 构建后运行
+./target/release/bin/termhelper --help          # 查看帮助
+./target/release/bin/termhelper --tui-demo      # 彩色样式预览
+./target/release/bin/termhelper --debug "查询"  # CLI 调试模式，打印 LLMResponse JSON
 ```
 
-**`scripts/run.sh` 做了什么：** 设置 `LD_LIBRARY_PATH`（指向仓颉 stdx 动态库 + ratatui Rust FFI 的 `.so`），然后执行 `target/release/bin/termhelper`。
+当前构建将 stdx、ratatui SDK、ratatui Rust FFI 和仓颉运行时静态链接进主程序；发行版自带的系统 C/C++ 运行库仍保持动态依赖。
 
 ### 配置文件
 
