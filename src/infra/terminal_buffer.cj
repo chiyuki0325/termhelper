@@ -11,19 +11,26 @@ import std.collection.*
 // ── 特殊字符常量 ──
 
 let RUNE_ESC = Rune(27)
-let RUNE_BS  = Rune(8)
+let RUNE_BS = Rune(8)
 
 // ── 颜色类型 ──
 
 /// ANSI 3/4-bit 调色板索引
 public struct AnsiColor {
-    public let idx: Int64       // 0-15, -1 = default
+    public let idx: Int64 // 0-15, -1 = default
     public let isBright: Bool
 
-    public init(idx: Int64, isBright: Bool) { this.idx = idx; this.isBright = isBright }
+    public init(idx: Int64, isBright: Bool) {
+        this.idx = idx
+        this.isBright = isBright
+    }
 
-    public static func defaultFg(): AnsiColor { AnsiColor(-1, false) }
-    public static func defaultBg(): AnsiColor { AnsiColor(-1, false) }
+    public static func defaultFg(): AnsiColor {
+        AnsiColor(-1, false)
+    }
+    public static func defaultBg(): AnsiColor {
+        AnsiColor(-1, false)
+    }
 }
 
 // ── 字符属性 ──
@@ -38,8 +45,12 @@ public struct CellAttrs {
     public var blink: Bool
 
     public init() {
-        this.bold = false; this.underline = false; this.reverse = false
-        this.dim = false; this.italic = false; this.blink = false
+        this.bold = false
+        this.underline = false
+        this.reverse = false
+        this.dim = false
+        this.italic = false
+        this.blink = false
     }
 
     /// 重置所有属性为默认
@@ -52,9 +63,9 @@ public struct CellAttrs {
 
 /// 虚拟终端的一个字符单元格
 public struct Cell {
-    public var char: Rune       // 字符
-    public var fg: AnsiColor    // 前景色
-    public var bg: AnsiColor    // 背景色
+    public var char: Rune // 字符
+    public var fg: AnsiColor // 前景色
+    public var bg: AnsiColor // 背景色
     public var attrs: CellAttrs // 属性
 
     public init(ch: Rune) {
@@ -64,27 +75,42 @@ public struct Cell {
         this.attrs = CellAttrs()
     }
 
-    public static func empty(): Cell { Cell(r' ') }
+    public static func empty(): Cell {
+        Cell(r' ')
+    }
 }
 
 // ── 光标状态 ──
 
 /// 光标位置（class：需要引用语义，支持原地修改）
 public class Cursor {
-    public var row: Int64   // 0-indexed
+    public var row: Int64 // 0-indexed
     public var col: Int64
 
-    public init(row: Int64, col: Int64) { this.row = row; this.col = col }
-    public static func home(): Cursor { Cursor(0, 0) }
+    public init(row: Int64, col: Int64) {
+        this.row = row
+        this.col = col
+    }
+    public static func home(): Cursor {
+        Cursor(0, 0)
+    }
 
     /// 带边界限制的设置（class 方法，直接修改）
     public func clamp(maxRow: Int64, maxCol: Int64): Unit {
         var r = row
         var c = col
-        if (r < 0) { r = 0 }
-        if (r >= maxRow) { r = maxRow - 1 }
-        if (c < 0) { c = 0 }
-        if (c >= maxCol) { c = maxCol - 1 }
+        if (r < 0) {
+            r = 0
+        }
+        if (r >= maxRow) {
+            r = maxRow - 1
+        }
+        if (c < 0) {
+            c = 0
+        }
+        if (c >= maxCol) {
+            c = maxCol - 1
+        }
         row = r
         col = c
     }
@@ -92,14 +118,14 @@ public class Cursor {
 
 // ── 终端缓冲区 ──
 
-let SCROLLBACK_MAX: Int64 = 10000  // scrollback 最大行数
+let SCROLLBACK_MAX: Int64 = 10000 // scrollback 最大行数
 
 /// 虚拟终端缓冲区（包含活跃屏幕区域 + 滚动回视区）
 public class TerminalBuffer {
-    public var rows: Int64           // 活跃行数 (= 真实终端高度)
-    public var cols: Int64           // 活跃列数 (= 真实终端宽度)
-    public var cursor: Cursor        // 当前光标位置
-    public var savedCursor: Cursor   // 保存的光标位置
+    public var rows: Int64 // 活跃行数 (= 真实终端高度)
+    public var cols: Int64 // 活跃列数 (= 真实终端宽度)
+    public var cursor: Cursor // 当前光标位置
+    public var savedCursor: Cursor // 保存的光标位置
 
     // 活跃屏幕（rows × cols 网格）
     private var grid: ArrayList<ArrayList<Cell>>
@@ -121,8 +147,8 @@ public class TerminalBuffer {
 
     // UTF-8 解码状态（多字节字符累积）
     private var utf8Buf: Array<UInt8>
-    private var utf8Expected: Int64   // 当前多字节序列还需几个续接字节
-    private var utf8Total: Int64      // 当前序列总长度
+    private var utf8Expected: Int64 // 当前多字节序列还需几个续接字节
+    private var utf8Total: Int64 // 当前序列总长度
 
     public init(rows: Int64, cols: Int64) {
         this.rows = rows
@@ -133,7 +159,9 @@ public class TerminalBuffer {
         this.grid = ArrayList<ArrayList<Cell>>(rows)
         for (r in 0..rows) {
             let row = ArrayList<Cell>(cols)
-            for (c in 0..cols) { row.add(Cell.empty()) }
+            for (c in 0..cols) {
+                row.add(Cell.empty())
+            }
             this.grid.add(row)
         }
 
@@ -155,13 +183,19 @@ public class TerminalBuffer {
     // ── 公开接口 ──
 
     /// 获取某行（活跃区域，0-indexed）
-    public func getRow(row: Int64): ArrayList<Cell> { grid[row] }
+    public func getRow(row: Int64): ArrayList<Cell> {
+        grid[row]
+    }
 
     /// 获取滚动回视区行数
-    public func scrollbackSize(): Int64 { scrollback.size }
+    public func scrollbackSize(): Int64 {
+        scrollback.size
+    }
 
     /// 获取滚动回视区某行
-    public func getScrollbackRow(idx: Int64): ArrayList<Cell> { scrollback[idx] }
+    public func getScrollbackRow(idx: Int64): ArrayList<Cell> {
+        scrollback[idx]
+    }
 
     /// 裁剪 scrollback 超出上限的部分
     private func trimScrollback(): Unit {
@@ -174,24 +208,36 @@ public class TerminalBuffer {
     /// Resize 只改变 active viewport，不把窗口缩小时临时不可见的内容写入 scrollback。
     /// 行宽只扩展不裁剪，避免缩窄后再放宽时丢失右侧已有 cell。
     public func resize(newRows: Int64, newCols: Int64): Unit {
-        let targetRows = if (newRows < 1) { 1 } else { newRows }
-        let targetCols = if (newCols < 1) { 1 } else { newCols }
+        let targetRows = if (newRows < 1) {
+            1
+        } else {
+            newRows
+        }
+        let targetCols = if (newCols < 1) {
+            1
+        } else {
+            newCols
+        }
 
         // 扩展列，但不裁剪超过当前 viewport 的 cell。渲染层只读取 cols 范围。
         for (r in 0..grid.size) {
             let row = grid[r]
-            while (row.size < targetCols) { row.add(Cell.empty()) }
+            while (row.size < targetCols) {
+                row.add(Cell.empty())
+            }
         }
 
         while (grid.size < targetRows) {
             let row = ArrayList<Cell>(targetCols)
-            for (c in 0..targetCols) { row.add(Cell.empty()) }
+            for (c in 0..targetCols) {
+                row.add(Cell.empty())
+            }
             grid.add(row)
         }
 
         // 缩高是 viewport 变化，不是程序输出滚动；不要把这些行塞进 scrollback。
         while (grid.size > targetRows) {
-            grid.remove(at:0)
+            grid.remove(at: 0)
         }
 
         this.rows = targetRows
@@ -209,16 +255,24 @@ public class TerminalBuffer {
         cursor = Cursor.home()
         currentFg = AnsiColor.defaultFg()
         currentBg = AnsiColor.defaultBg()
-        currentAttrs.reset()
+        currentAttrs = currentAttrs.reset()
         scrollback.clear()
     }
 
     /// 获取可见区域内容的纯文本表示（用于发送给 LLM）
     public func toPlainText(): String {
         var result = ""
-        let visibleRows = if (rows < grid.size) { rows } else { grid.size }
+        let visibleRows = if (rows < grid.size) {
+            rows
+        } else {
+            grid.size
+        }
         for (r in 0..visibleRows) {
-            let visibleCols = if (cols < grid[r].size) { cols } else { grid[r].size }
+            let visibleCols = if (cols < grid[r].size) {
+                cols
+            } else {
+                grid[r].size
+            }
             for (c in 0..visibleCols) {
                 let ch = grid[r][c].char
                 if (ch != r'\0') {
@@ -272,7 +326,9 @@ public class TerminalBuffer {
                 if (utf8Expected == 0) {
                     // 序列完成，解码为 Rune
                     let arr = Array<UInt8>(utf8Total, repeat: 0)
-                    for (i in 0..utf8Total) { arr[i] = utf8Buf[i] }
+                    for (i in 0..utf8Total) {
+                        arr[i] = utf8Buf[i]
+                    }
                     let s = String.fromUtf8(arr)
                     if (s.size > 0) {
                         let runes = s.toRuneArray()
@@ -292,18 +348,18 @@ public class TerminalBuffer {
         // 新字符开始
         if (b < 0x80) {
             // ASCII 单字节
-            if (b >= 32) {  // 可见 ASCII（空格及以上）
+            if (b >= 32) { // 可见 ASCII（空格及以上）
                 putChar(Rune(Int32(b)))
-            } else if (b == 10) {  // \n
+            } else if (b == 10) { // \n
                 putChar(r'\n')
-            } else if (b == 13) {  // \r
+            } else if (b == 13) { // \r
                 putChar(r'\r')
-            } else if (b == 9) {   // \t
+            } else if (b == 9) { // \t
                 putChar(r'\t')
-            } else if (b == 8) {   // BS
+            } else if (b == 8) { // BS
                 putChar(RUNE_BS)
             }
-            // 其他控制字符忽略
+        // 其他控制字符忽略
         } else if ((b & 0xE0) == 0xC0) {
             // 2 字节序列: 110xxxxx
             utf8Buf[0] = b
@@ -325,7 +381,9 @@ public class TerminalBuffer {
 
     /// 处理一批 PTY 输出
     public func processData(data: Array<UInt8>): Unit {
-        for (b in data) { processByte(b) }
+        for (b in data) {
+            processByte(b)
+        }
     }
 
     /// 处理字符串形式的 PTY 输出
@@ -349,9 +407,13 @@ public class TerminalBuffer {
         } else if (ch == r'\t') {
             // 制表符：跳到下个 8 的倍数列
             cursor.col = ((cursor.col / 8) + 1) * 8
-            if (cursor.col >= cols) { cursor.col = cols - 1 }
+            if (cursor.col >= cols) {
+                cursor.col = cols - 1
+            }
         } else if (ch == RUNE_BS) { // BS
-            if (cursor.col > 0) { cursor.col -= 1 }
+            if (cursor.col > 0) {
+                cursor.col -= 1
+            }
         } else if (ch > r' ') {
             // 可见字符（ASCII + Unicode，包括中文等多字节字符）
             let w = charWidth(ch)
@@ -362,7 +424,11 @@ public class TerminalBuffer {
                 }
                 cursor.col += 1
             }
-            let fitsWidth = if (w == 2) { cursor.col + 2 <= cols } else { cursor.col < cols }
+            let fitsWidth = if (w == 2) {
+                cursor.col + 2 <= cols
+            } else {
+                cursor.col < cols
+            }
             if (cursor.row >= 0 && cursor.row < rows && cursor.col >= 0 && fitsWidth) {
                 var cell = Cell(ch)
                 cell.fg = currentFg
@@ -392,11 +458,13 @@ public class TerminalBuffer {
     private func scrollUp(): Unit {
         let top = grid[0]
         scrollback.add(top)
-        grid.remove(at:0)
+        grid.remove(at: 0)
         trimScrollback()
 
         let newRow = ArrayList<Cell>(cols)
-        for (c in 0..cols) { newRow.add(Cell.empty()) }
+        for (c in 0..cols) {
+            newRow.add(Cell.empty())
+        }
         grid.add(newRow)
     }
 
@@ -404,7 +472,9 @@ public class TerminalBuffer {
 
     private func processEscChar(ch: Rune): Unit {
         // ESC c — 完全重置
-        if (ch == r'c') { fullReset() }
+        if (ch == r'c') {
+            fullReset()
+        }
     }
 
     // ── CSI 序列解析 ──
@@ -437,19 +507,39 @@ public class TerminalBuffer {
     }
 
     private func executeCsiSequence(ch: Rune): Unit {
-        let defaultParam = if (ansiParams.size > 0) { ansiParams[0] } else { 0 }
+        let defaultParam = if (ansiParams.size > 0) {
+            ansiParams[0]
+        } else {
+            0
+        }
 
         match (ch) {
             // Cursor Up / Down / Forward / Back
-            case r'A' => cursor.row -= defaultParam; cursor.clamp(rows, cols)
-            case r'B' => cursor.row += defaultParam; cursor.clamp(rows, cols)
-            case r'C' => cursor.col += defaultParam; cursor.clamp(rows, cols)
-            case r'D' => cursor.col -= defaultParam; cursor.clamp(rows, cols)
+            case r'A' =>
+                cursor.row -= defaultParam
+                cursor.clamp(rows, cols)
+            case r'B' =>
+                cursor.row += defaultParam
+                cursor.clamp(rows, cols)
+            case r'C' =>
+                cursor.col += defaultParam
+                cursor.clamp(rows, cols)
+            case r'D' =>
+                cursor.col -= defaultParam
+                cursor.clamp(rows, cols)
 
             // Cursor Position (行;列，1-indexed)
             case r'H' | r'f' =>
-                let row = if (ansiParams.size >= 1 && ansiParams[0] > 0) { ansiParams[0] - 1 } else { 0 }
-                let col = if (ansiParams.size >= 2 && ansiParams[1] > 0) { ansiParams[1] - 1 } else { 0 }
+                let row = if (ansiParams.size >= 1 && ansiParams[0] > 0) {
+                    ansiParams[0] - 1
+                } else {
+                    0
+                }
+                let col = if (ansiParams.size >= 2 && ansiParams[1] > 0) {
+                    ansiParams[1] - 1
+                } else {
+                    0
+                }
                 cursor.row = row
                 cursor.col = col
                 cursor.clamp(rows, cols)
@@ -458,7 +548,10 @@ public class TerminalBuffer {
             case r'E' =>
                 cursor.row += defaultParam
                 cursor.col = 0
-                if (cursor.row >= rows) { scrollUp(); cursor.row = rows - 1 }
+                if (cursor.row >= rows) {
+                    scrollUp();
+                    cursor.row = rows - 1
+                }
 
             // Erase in Display
             case r'J' =>
@@ -530,8 +623,12 @@ public class TerminalBuffer {
                 }
 
             // Scroll Up / Down
-            case r'S' => for (j in 0..defaultParam) { scrollUp() }
-            case r'T' => for (j in 0..defaultParam) { scrollDown() }
+            case r'S' => for (j in 0..defaultParam) {
+                scrollUp()
+            }
+            case r'T' => for (j in 0..defaultParam) {
+                scrollDown()
+            }
 
             // Insert Lines (IL) — CSI Ps L
             case r'L' => insertLines(defaultParam)
@@ -550,14 +647,19 @@ public class TerminalBuffer {
 
     private func applySgrParam(p: Int64): Unit {
         match (p) {
-            case 0 => currentAttrs.reset(); currentFg = AnsiColor.defaultFg(); currentBg = AnsiColor.defaultBg()
+            case 0 =>
+                currentAttrs = currentAttrs.reset()
+                currentFg = AnsiColor.defaultFg()
+                currentBg = AnsiColor.defaultBg()
             case 1 => currentAttrs.bold = true
             case 2 => currentAttrs.dim = true
             case 3 => currentAttrs.italic = true
             case 4 => currentAttrs.underline = true
             case 5 => currentAttrs.blink = true
             case 7 => currentAttrs.reverse = true
-            case 22 => currentAttrs.bold = false; currentAttrs.dim = false
+            case 22 =>
+                currentAttrs.bold = false
+                currentAttrs.dim = false
             case 23 => currentAttrs.italic = false
             case 24 => currentAttrs.underline = false
             case 25 => currentAttrs.blink = false
@@ -576,22 +678,32 @@ public class TerminalBuffer {
 
     /// Insert Lines (IL) — CSI Ps L
     private func insertLines(count: Int64): Unit {
-        let n = if (count < 1) { 1 } else { count }
+        let n = if (count < 1) {
+            1
+        } else {
+            count
+        }
         for (j in 0..n) {
             // 从底部开始，每行向下移动一行（光标行以下的内容）
             var r = rows - 1
             while (r > cursor.row) {
-                copyRow(r, r - 1)  // grid[r] = grid[r-1] 的内容
+                copyRow(r, r - 1) // grid[r] = grid[r-1] 的内容
                 r -= 1
             }
             // 光标行清空
-            for (c in 0..cols) { grid[cursor.row][c] = Cell.empty() }
+            for (c in 0..cols) {
+                grid[cursor.row][c] = Cell.empty()
+            }
         }
     }
 
     /// Delete Lines (DL) — CSI Ps M
     private func deleteLines(count: Int64): Unit {
-        let n = if (count < 1) { 1 } else { count }
+        let n = if (count < 1) {
+            1
+        } else {
+            count
+        }
         for (j in 0..n) {
             // 从光标行开始，每行向上移动
             var r = cursor.row
@@ -600,7 +712,9 @@ public class TerminalBuffer {
                 r += 1
             }
             // 最后行清空
-            for (c in 0..cols) { grid[rows - 1][c] = Cell.empty() }
+            for (c in 0..cols) {
+                grid[rows - 1][c] = Cell.empty()
+            }
         }
     }
 
@@ -614,7 +728,11 @@ public class TerminalBuffer {
     /// Delete Characters (DCH) — CSI Ps P
     /// 删除光标处 Ps 个字符，后续字符左移
     private func deleteChars(count: Int64): Unit {
-        let n = if (count < 1) { 1 } else { count }
+        let n = if (count < 1) {
+            1
+        } else {
+            count
+        }
         let r = cursor.row
         let c = cursor.col
         // 将后续字符左移
@@ -631,39 +749,56 @@ public class TerminalBuffer {
 
     private func eraseFromCursor(): Unit {
         // 从光标到屏幕末尾
-        let cr = cursor.row; let cc = cursor.col
-        for (c in cc..cols) { grid[cr][c] = Cell.empty() }
+        let cr = cursor.row;
+        let cc = cursor.col
+        for (c in cc..cols) {
+            grid[cr][c] = Cell.empty()
+        }
         for (r in (cr + 1)..rows) {
-            for (c in 0..cols) { grid[r][c] = Cell.empty() }
+            for (c in 0..cols) {
+                grid[r][c] = Cell.empty()
+            }
         }
     }
 
     private func eraseToCursor(): Unit {
         for (r in 0..cursor.row) {
-            for (c in 0..cols) { grid[r][c] = Cell.empty() }
+            for (c in 0..cols) {
+                grid[r][c] = Cell.empty()
+            }
         }
-        for (c in 0..(cursor.col + 1)) { grid[cursor.row][c] = Cell.empty() }
+        for (c in 0..(cursor.col + 1)) {
+            grid[cursor.row][c] = Cell.empty()
+        }
     }
 
     private func eraseLine(): Unit {
-        for (c in 0..cols) { grid[cursor.row][c] = Cell.empty() }
+        for (c in 0..cols) {
+            grid[cursor.row][c] = Cell.empty()
+        }
     }
 
     private func eraseLineFromCursor(): Unit {
-        for (c in cursor.col..cols) { grid[cursor.row][c] = Cell.empty() }
+        for (c in cursor.col..cols) {
+            grid[cursor.row][c] = Cell.empty()
+        }
     }
 
     private func eraseLineToCursor(): Unit {
-        for (c in 0..(cursor.col + 1)) { grid[cursor.row][c] = Cell.empty() }
+        for (c in 0..(cursor.col + 1)) {
+            grid[cursor.row][c] = Cell.empty()
+        }
     }
 
     private func scrollDown(): Unit {
         // 底部行移出，顶部插入空行
         let last = grid[grid.size - 1]
-        grid.remove(at:grid.size - 1)
+        grid.remove(at: grid.size - 1)
 
         let newRow = ArrayList<Cell>(cols)
-        for (c in 0..cols) { newRow.add(Cell.empty()) }
+        for (c in 0..cols) {
+            newRow.add(Cell.empty())
+        }
         grid.add(newRow)
     }
 }

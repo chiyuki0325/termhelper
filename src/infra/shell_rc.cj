@@ -90,7 +90,11 @@ public func uninstall(rcPath: String): Bool {
 
     let before = content[0..startIdx]
     let afterEnd = endIdx + MARKER_END.size
-    let after = content[afterEnd..]
+    var afterStart = afterEnd
+    if (afterStart < content.size && content[afterStart] == b'\n') {
+        afterStart += 1
+    }
+    let after = content[afterStart..]
     shellWriteFile(rcPath, before + after)
     println("${uiText("shell_uninstalled_from")} ${rcPath}")
     true
@@ -113,7 +117,9 @@ func shellWriteFile(path: String, content: String): Unit {
 func ensureShellParentDir(filePath: String): Unit {
     var lastSep: Int64 = -1
     for (i in 0..filePath.size) {
-        if (filePath[i] == b'/') { lastSep = i }
+        if (filePath[i] == b'/') {
+            lastSep = i
+        }
     }
     if (lastSep > 0) {
         let dirPath = filePath[0..lastSep]
