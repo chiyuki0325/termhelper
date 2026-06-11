@@ -1,6 +1,26 @@
 package termhelper.util
 
 import termhelper.types.*
+import stdx.encoding.json.*
+
+@Test
+func llmResponseSchemaClosesAllObjectSchemasForOpenAIStrictMode(): Unit {
+    let root = JsonValue.fromStr(llmResponseSchema()).asObject()
+    @Expect(requiredContains(root, "type"), true)
+    @Expect(requiredContains(root, "data"), true)
+    @Expect(allObjectSchemasRejectAdditionalProperties(root), true)
+
+    let properties = root.get("properties").getOrThrow().asObject()
+    let dataSchema = properties.get("data").getOrThrow().asObject()
+    let variants = dataSchema.get("anyOf").getOrThrow().asArray()
+    @Expect(variants.size(), 3)
+}
+
+@Test
+func llmResponseSchemaForGoogleOmitsAdditionalProperties(): Unit {
+    let root = JsonValue.fromStr(llmResponseSchemaForProvider("google")).asObject()
+    @Expect(noObjectContainsAdditionalProperties(root), true)
+}
 
 @Test
 func parseCommandWireFormatNormalizesLowercaseSafety(): Unit {
@@ -75,4 +95,100 @@ func parseRejectsInvalidResponseShape(): Unit {
     @Expect(parseLLMResponseJson("{\"type\":\"command\",\"data\":[]}").isNone())
     @Expect(parseLLMResponseJson("{\"type\":\"unknown\",\"data\":{}}").isNone())
     @Expect(parseLLMResponseJson("not-json").isNone())
+}
+
+func requiredContains(schema: JsonObject, name: String): Bool {
+    let required = schema.get("required").getOrThrow().asArray()
+    for (i in 0..required.size()) {
+        match (required.get(i)) {
+            case Some(value) =>
+                if (isJsonString(value, name)) {
+                    return true
+                }
+            case None => ()
+        }
+    }
+    false
+}
+
+func allObjectSchemasRejectAdditionalProperties(value: JsonValue): Bool {
+    match (value.kind()) {
+        case JsObject =>
+            let obj = value.asObject()
+            if (isObjectSchema(obj) && !hasFalseAdditionalProperties(obj)) {
+                return false
+            }
+            for ((_, child) in obj.getFields()) {
+                if (!allObjectSchemasRejectAdditionalProperties(child)) {
+                    return false
+                }
+            }
+            true
+        case JsArray =>
+            let arr = value.asArray()
+            for (i in 0..arr.size()) {
+                match (arr.get(i)) {
+                    case Some(child) =>
+                        if (!allObjectSchemasRejectAdditionalProperties(child)) {
+                            return false
+                        }
+                    case None => ()
+                }
+            }
+            true
+        case _ => true
+    }
+}
+
+func isObjectSchema(obj: JsonObject): Bool {
+    match (obj.get("type")) {
+        case Some(value) => isJsonString(value, "object")
+        case None => false
+    }
+}
+
+func hasFalseAdditionalProperties(obj: JsonObject): Bool {
+    match (obj.get("additionalProperties")) {
+        case Some(value) => match (value.kind()) {
+            case JsBool => !value.asBool().getValue()
+            case _ => false
+        }
+        case None => false
+    }
+}
+
+func isJsonString(value: JsonValue, expected: String): Bool {
+    match (value.kind()) {
+        case JsString => value.asString().getValue() == expected
+        case _ => false
+    }
+}
+
+func noObjectContainsAdditionalProperties(value: JsonValue): Bool {
+    match (value.kind()) {
+        case JsObject =>
+            let obj = value.asObject()
+            if (obj.containsKey("additionalProperties")) {
+                return false
+            }
+            for ((_, child) in obj.getFields()) {
+                if (!noObjectContainsAdditionalProperties(child)) {
+                    return false
+                }
+            }
+            true
+        case JsArray =>
+            let arr = value.asArray()
+            for (i in 0..arr.size()) {
+                match (arr.get(i)) {
+                    case Some(child) =>
+                        if (!noObjectContainsAdditionalProperties(child)) {
+                            return false
+                        }
+                    case None => ()
+                }
+            }
+            true
+        case _ => true
+    }
 }

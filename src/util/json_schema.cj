@@ -1,11 +1,6 @@
 package termhelper.util
 
 import termhelper.types.*
-import termhelper.infra.debugTrace
-import naivejson.schema.*
-import naivejson.schema.model.*
-import naivejson.schema.render.*
-import std.collection.*
 import stdx.encoding.json.*
 import stdx.serialization.serialization.*
 
@@ -16,18 +11,143 @@ import stdx.serialization.serialization.*
 
 /// 生成 LLMResponse 的完整 JSON Schema（用于 Structured Output）
 public func llmResponseSchema(): String {
-    let builder = SchemaBuilder()
+    llmResponseSchemaInternal(rejectAdditionalProperties: true)
+}
 
-    // 预加载子类型 schema（触发 $defs 生成）
-    CommandData.toJsonSchema()
-    InvestigateData.toJsonSchema()
-    ClarifyData.toJsonSchema()
+/// Google response_schema 不支持 OpenAI strict schema 要求的 additionalProperties:false。
+public func llmResponseSchemaForProvider(provider: String): String {
+    if (provider == "google") {
+        llmResponseSchemaInternal(rejectAdditionalProperties: false)
+    } else {
+        llmResponseSchema()
+    }
+}
 
-    let typeProp = builder.enumSchema(["command", "investigate", "clarify"])
-    builder.addProperty("type", typeProp, true, false)
-    builder.addProperty("data", builder.objectSchema([], [], additionalProperties: None), true, false)
-    builder.setRootType("termhelper.response")
-    builder.toJsonSchema()
+func llmResponseSchemaInternal(rejectAdditionalProperties!: Bool): String {
+    let root = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(root, "type", stringEnumSchema(["command", "investigate", "clarify"]))
+    addRequiredProperty(root, "data", responseDataSchema(rejectAdditionalProperties))
+    root.toJsonString()
+}
+
+func responseDataSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = JsonObject()
+    let variants = JsonArray()
+    variants.add(commandDataSchema(rejectAdditionalProperties))
+    variants.add(investigateDataSchema(rejectAdditionalProperties))
+    variants.add(clarifyDataSchema(rejectAdditionalProperties))
+    schema.put("anyOf", variants)
+    schema
+}
+
+func commandDataSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "command", stringSchema())
+    addRequiredProperty(schema, "explanation", explanationSchema(rejectAdditionalProperties))
+    addRequiredProperty(schema, "interactive", booleanSchema())
+    addRequiredProperty(schema, "safety", safetyInfoSchema(rejectAdditionalProperties))
+    addRequiredProperty(schema, "factEdits", arraySchema(factEditSchema(rejectAdditionalProperties)))
+    schema
+}
+
+func factEditSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "op", stringEnumSchema(["add", "update", "delete"]))
+    addRequiredProperty(schema, "id", stringSchema())
+    addRequiredProperty(schema, "oldText", stringSchema())
+    addRequiredProperty(schema, "newText", stringSchema())
+    addRequiredProperty(schema, "source", stringSchema())
+    addRequiredProperty(schema, "reason", stringSchema())
+    schema
+}
+
+func explanationSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "summary", stringSchema())
+    addRequiredProperty(schema, "breakdown", arraySchema(breakdownItemSchema(rejectAdditionalProperties)))
+    schema
+}
+
+func breakdownItemSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "component", stringSchema())
+    addRequiredProperty(schema, "explanation", stringSchema())
+    schema
+}
+
+func safetyInfoSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "level", stringEnumSchema(["safe", "caution", "danger", "privilege"]))
+    addRequiredProperty(schema, "warnings", arraySchema(stringSchema()))
+    schema
+}
+
+func investigateDataSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "reason", stringSchema())
+    addRequiredProperty(schema, "commands", arraySchema(diagnosticCommandSchema(rejectAdditionalProperties)))
+    addRequiredProperty(schema, "contextUpdates", objectSchema(rejectAdditionalProperties))
+    schema
+}
+
+func diagnosticCommandSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "command", stringSchema())
+    addRequiredProperty(schema, "rationale", stringSchema())
+    schema
+}
+
+func clarifyDataSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = objectSchema(rejectAdditionalProperties)
+    addRequiredProperty(schema, "question", stringSchema())
+    schema
+}
+
+func objectSchema(rejectAdditionalProperties: Bool): JsonObject {
+    let schema = JsonObject()
+    schema.put("type", JsonString("object"))
+    schema.put("properties", JsonObject())
+    schema.put("required", JsonArray())
+    if (rejectAdditionalProperties) {
+        schema.put("additionalProperties", JsonBool(false))
+    }
+    schema
+}
+
+func addRequiredProperty(schema: JsonObject, name: String, propSchema: JsonValue): Unit {
+    let properties = schema.get("properties").getOrThrow().asObject()
+    properties.put(name, propSchema)
+    let required = schema.get("required").getOrThrow().asArray()
+    required.add(JsonString(name))
+}
+
+func stringSchema(): JsonObject {
+    let schema = JsonObject()
+    schema.put("type", JsonString("string"))
+    schema
+}
+
+func booleanSchema(): JsonObject {
+    let schema = JsonObject()
+    schema.put("type", JsonString("boolean"))
+    schema
+}
+
+func arraySchema(items: JsonValue): JsonObject {
+    let schema = JsonObject()
+    schema.put("type", JsonString("array"))
+    schema.put("items", items)
+    schema
+}
+
+func stringEnumSchema(values: Array<String>): JsonObject {
+    let schema = stringSchema()
+    let enumValues = JsonArray()
+    for (value in values) {
+        enumValues.add(JsonString(value))
+    }
+    schema.put("enum", enumValues)
+    schema
 }
 
 // ── 序列化 ──

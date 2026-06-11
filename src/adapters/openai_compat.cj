@@ -19,9 +19,13 @@ public class OpenAICompatProvider {
     private let readTimeoutSec: Int64
     private let idleTimeoutSec: Int64
 
-    public init(baseUrl: String, apiKey: String, model: String,
-                connectTimeoutSec: Int64, readTimeoutSec: Int64, idleTimeoutSec: Int64) {
-        this.baseUrl = if (baseUrl.endsWith("/")) { baseUrl[0..(baseUrl.size - 1)] } else { baseUrl }
+    public init(baseUrl: String, apiKey: String, model: String, connectTimeoutSec: Int64, readTimeoutSec: Int64,
+        idleTimeoutSec: Int64) {
+        this.baseUrl = if (baseUrl.endsWith("/")) {
+            baseUrl[0..(baseUrl.size - 1)]
+        } else {
+            baseUrl
+        }
         this.apiKey = apiKey
         this.model = model
         this.connectTimeoutSec = connectTimeoutSec
@@ -111,13 +115,13 @@ public class OpenAICompatProvider {
     }
 
     private func chatCollect(req: ChatRequest): ChatResponse {
-        let body = buildRequestBody(req, true)
+        let body = buildRequestBody(req, false)
         let url = "${baseUrl}/chat/completions"
-        streamPost(url, body, { _ => () })
+        collectPost(url, body)
     }
 
-    private func sendPost(url: String, body: String): String {
-        debugTrace("OpenAICompat.sendPost: url=${url}, body_size=${body.size}")
+    private func collectPost(url: String, body: String): ChatResponse {
+        debugTrace("OpenAICompat.collectPost: url=${url}, body_size=${body.size}")
         let client = buildClient(readTimeoutSec)
         let req = HttpRequestBuilder()
             .post()
@@ -126,26 +130,29 @@ public class OpenAICompatProvider {
             .header("Authorization", "Bearer " + apiKey)
             .body(body)
             .build()
-        debugTrace("OpenAICompat.sendPost: sending")
+        debugTrace("OpenAICompat.collectPost: sending")
         let resp = client.send(req)
-        debugTrace("OpenAICompat.sendPost: status=${resp.status}")
+        debugTrace("OpenAICompat.collectPost: status=${resp.status}")
         if (resp.status != 200) {
             let errBody = StringReader(resp.body).readToEnd()
             client.close()
-            let errObj = JsonObject()
-            errObj.put("error", JsonString("HTTP ${resp.status}: ${errBody}"))
-            return errObj.toJsonString()
+            let errMsg = "HTTP ${resp.status}: ${errBody}"
+            return ChatResponse(errBody, "error: ${errMsg}", Usage.empty())
         }
         let result = StringReader(resp.body).readToEnd()
         client.close()
-        debugTrace("OpenAICompat.sendPost: done")
-        result
+        debugTrace("OpenAICompat.collectPost: response body_size=${result.size}")
+        parseOpenAIChatCompletionResponse(result)
     }
 
     private func streamPost(url: String, body: String, onEvent: (StreamEvent) -> Unit): ChatResponse {
         debugTrace("OpenAICompat.streamPost: url=${url}, body_size=${body.size}")
         // 流式读超时放宽到 idleTimeoutSec（两次 chunk 的最大间隔）
-        let client = buildClient(if (idleTimeoutSec > readTimeoutSec) { idleTimeoutSec } else { readTimeoutSec * 3 })
+        let client = buildClient(if (idleTimeoutSec > readTimeoutSec) {
+            idleTimeoutSec
+        } else {
+            readTimeoutSec * 3
+        })
 
         let req = HttpRequestBuilder()
             .post()
@@ -173,10 +180,14 @@ public class OpenAICompatProvider {
         var stopReason = ""
         var toolCallAccum = ArrayList<ToolCall>()
         var toolCallState = ArrayList<(String, String, String)>()
+        var rawBytes = ArrayList<UInt8>()
 
         var len = resp.body.read(buf)
         while (len > 0) {
-            for (i in 0..len) { parser.feedByte(buf[i]) }
+            for (i in 0..len) {
+                rawBytes.add(buf[i])
+                parser.feedByte(buf[i])
+            }
 
             var evt = parser.tryGetEvent()
             while (true) {
@@ -186,18 +197,32 @@ public class OpenAICompatProvider {
                             onEvent(StreamEvent.Done(finalUsage))
                             for (ti in 0..toolCallState.size) {
                                 let (tcId, tcName, tcJson) = toolCallState[ti]
-                                if (tcId.size > 0) { toolCallAccum.add(ToolCall(tcId, tcName, tcJson)) }
+                                if (tcId.size > 0) {
+                                    toolCallAccum.add(ToolCall(tcId, tcName, tcJson))
+                                }
                             }
                             client.close()
-                            var resultDone = ChatResponse(contentAccum, if (stopReason.size > 0) { stopReason } else { "stop" }, finalUsage)
-                            for (ti in 0..toolCallAccum.size) { resultDone.toolCalls.add(toolCallAccum[ti]) }
+                            var resultDone = ChatResponse(contentAccum, if (stopReason.size > 0) {
+                                stopReason
+                            } else {
+                                "stop"
+                            }, finalUsage)
+                            for (ti in 0..toolCallAccum.size) {
+                                resultDone.toolCalls.add(toolCallAccum[ti])
+                            }
                             return resultDone
                         }
                         if (e.data.size > 0) {
                             let (delta, fr, usage) = processOpenAIChunk(e.data, toolCallState, toolCallAccum, onEvent)
-                            if (delta.size > 0) { contentAccum += delta }
-                            if (fr.size > 0) { stopReason = fr }
-                            if (usage.inputTokens > 0 || usage.outputTokens > 0) { finalUsage = usage }
+                            if (delta.size > 0) {
+                                contentAccum += delta
+                            }
+                            if (fr.size > 0) {
+                                stopReason = fr
+                            }
+                            if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+                                finalUsage = usage
+                            }
                         }
                         evt = parser.tryGetEvent()
                     case None => break
@@ -206,16 +231,35 @@ public class OpenAICompatProvider {
             len = resp.body.read(buf)
         }
         client.close()
+
+        // 如果 SSE 流没有累积到任何内容，尝试将原始字节当做非流式 JSON 响应解析。
+        // 这处理了部分 provider（如 DeepSeek）不支持 json_schema + stream 组合的场景：
+        // 虽然请求了 stream:true，但服务端返回的仍是非 SSE 格式的 JSON。
+        if (contentAccum.size == 0 && rawBytes.size > 0) {
+            let rawBody = String.fromUtf8(rawBytes.toArray()).trimAscii()
+            if (rawBody.startsWith("{") && rawBody.contains("\"choices\"")) {
+                let parsed = parseOpenAIChatCompletionResponse(rawBody)
+                if (parsed.content.size > 0) {
+                    onEvent(StreamEvent.Done(parsed.usage))
+                    return parsed
+                }
+            }
+        }
+
         onEvent(StreamEvent.Done(finalUsage))
-        var result = ChatResponse(contentAccum, if (stopReason.size > 0) { stopReason } else { "stop" }, finalUsage)
-        for (ti in 0..toolCallAccum.size) { result.toolCalls.add(toolCallAccum[ti]) }
+        var result = ChatResponse(contentAccum, if (stopReason.size > 0) {
+            stopReason
+        } else {
+            "stop"
+        }, finalUsage)
+        for (ti in 0..toolCallAccum.size) {
+            result.toolCalls.add(toolCallAccum[ti])
+        }
         result
     }
 
-    private func processOpenAIChunk(dataJson: String,
-                                    toolCallState: ArrayList<(String, String, String)>,
-                                    toolCallAccum: ArrayList<ToolCall>,
-                                    onEvent: (StreamEvent) -> Unit): (String, String, Usage) {
+    private func processOpenAIChunk(dataJson: String, toolCallState: ArrayList<(String, String, String)>,
+        toolCallAccum: ArrayList<ToolCall>, onEvent: (StreamEvent) -> Unit): (String, String, Usage) {
         try {
             let jv = JsonValue.fromStr(dataJson)
             let root = jv.asObject()
@@ -263,14 +307,25 @@ public class OpenAICompatProvider {
                                                                     if (tcId.size > 0 && prevId.size == 0) {
                                                                         onEvent(StreamEvent.ToolCallStart(tcId))
                                                                     }
-                                                                    if (tcName.size > 0 && prevName.size == 0) { prevName = tcName }
+                                                                    if (tcName.size > 0 && prevName.size == 0) {
+                                                                        prevName = tcName
+                                                                    }
                                                                     if (tcArgs.size > 0) {
                                                                         prevJson += tcArgs
-                                                                        let deltaId = if (tcId.size > 0) { tcId } else { prevId }
-                                                                        onEvent(StreamEvent.ToolCallDelta(deltaId, tcArgs))
+                                                                        let deltaId = if (tcId.size > 0) {
+                                                                            tcId
+                                                                        } else {
+                                                                            prevId
+                                                                        }
+                                                                        onEvent(
+                                                                            StreamEvent.ToolCallDelta(deltaId, tcArgs))
                                                                     }
                                                                     // 合并 id：当前 chunk 有 id 则覆盖，否则保留状态中的 id
-                                                                    let mergedId = if (tcId.size > 0) { tcId } else { prevId }
+                                                                    let mergedId = if (tcId.size > 0) {
+                                                                        tcId
+                                                                    } else {
+                                                                        prevId
+                                                                    }
                                                                     toolCallState[tcIdx] = (mergedId, prevName, prevJson)
                                                                 case None => ()
                                                             }
@@ -282,7 +337,9 @@ public class OpenAICompatProvider {
                                     case None => ()
                                 }
                                 let fr = jsonGetString(first, "finish_reason", "")
-                                if (fr.size > 0) { finishReason = fr }
+                                if (fr.size > 0) {
+                                    finishReason = fr
+                                }
                                 if (fr == "tool_calls" || fr == "function_call") {
                                     for (ti in 0..toolCallState.size) {
                                         let (tcId, tcName, tcJson) = toolCallState[ti]
@@ -299,21 +356,29 @@ public class OpenAICompatProvider {
                 case None => ()
             }
             (contentDelta, finishReason, usage)
-        } catch (_: Exception) { ("", "", Usage.empty()) }
+        } catch (_: Exception) {
+            ("", "", Usage.empty())
+        }
     }
 
     private func extractOpenAIReasoningDelta(delta: JsonObject): String {
         let keys = ["reasoning_content", "reasoning", "thinking"]
         for (key in keys) {
             let value = jsonGetString(delta, key, "")
-            if (value.size > 0) { return value }
+            if (value.size > 0) {
+                return value
+            }
         }
         ""
     }
 
     private func buildRequestBody(req: ChatRequest, stream: Bool): String {
         let obj = JsonObject()
-        obj.put("model", JsonString(if (req.model.size > 0) { req.model } else { model }))
+        obj.put("model", JsonString(if (req.model.size > 0) {
+            req.model
+        } else {
+            model
+        }))
         obj.put("stream", JsonBool(stream))
 
         let msgs = JsonArray()
@@ -350,30 +415,28 @@ public class OpenAICompatProvider {
                 case MessageRole.Assistant =>
                     // Assistant 消息：可能包含 tool_calls
                     match (m.toolCalls) {
-                        case Some(tcs) =>
-                            // content 可以为 null/空（纯 tool call 的 assistant 消息）
-                            if (m.content.size > 0) {
-                                mObj.put("content", JsonString(m.content))
-                            }
-                            // 无文本内容则省略 content 字段
-                            let tcArr = JsonArray()
-                            for (j in 0..tcs.size) {
-                                let tc = tcs[j]
-                                let tcObj = JsonObject()
-                                tcObj.put("id", JsonString(tc.id))
-                                tcObj.put("type", JsonString("function"))
-                                let funcObj = JsonObject()
-                                funcObj.put("name", JsonString(tc.name))
-                                funcObj.put("arguments", JsonString(tc.arguments))
-                                tcObj.put("function", funcObj)
-                                tcArr.add(tcObj)
-                            }
-                            mObj.put("tool_calls", tcArr)
-                        case None =>
+                    case Some(tcs) =>
+                        // content 可以为 null/空（纯 tool call 的 assistant 消息）
+                        if (m.content.size > 0) {
                             mObj.put("content", JsonString(m.content))
-                    }
-                case _ =>
-                    mObj.put("content", JsonString(m.content))
+                        }
+                        // 无文本内容则省略 content 字段
+                        let tcArr = JsonArray()
+                        for (j in 0..tcs.size) {
+                            let tc = tcs[j]
+                            let tcObj = JsonObject()
+                            tcObj.put("id", JsonString(tc.id))
+                            tcObj.put("type", JsonString("function"))
+                            let funcObj = JsonObject()
+                            funcObj.put("name", JsonString(tc.name))
+                            funcObj.put("arguments", JsonString(tc.arguments))
+                            tcObj.put("function", funcObj)
+                            tcArr.add(tcObj)
+                        }
+                        mObj.put("tool_calls", tcArr)
+                    case None => mObj.put("content", JsonString(m.content))
+                }
+                case _ => mObj.put("content", JsonString(m.content))
             }
             msgs.add(mObj)
         }
@@ -398,7 +461,11 @@ public class OpenAICompatProvider {
                     let funcObj = JsonObject()
                     funcObj.put("name", JsonString(t.name))
                     funcObj.put("description", JsonString(t.description))
-                    try { funcObj.put("parameters", JsonValue.fromStr(t.parameters)) } catch (_: Exception) { funcObj.put("parameters", JsonObject()) }
+                    try {
+                        funcObj.put("parameters", JsonValue.fromStr(t.parameters))
+                    } catch (_: Exception) {
+                        funcObj.put("parameters", JsonObject())
+                    }
                     tObj.put("function", funcObj)
                     toolsArr.add(tObj)
                 }
@@ -407,32 +474,34 @@ public class OpenAICompatProvider {
         }
 
         match (req.toolChoice) {
-            case Some(tc) =>
-                match (tc) {
-                    case ToolChoice.Auto => obj.put("tool_choice", JsonString("auto"))
-                    case ToolChoice.Required => obj.put("tool_choice", JsonString("required"))
-                    case ToolChoice.NoTool => obj.put("tool_choice", JsonString("none"))
-                }
+            case Some(tc) => match (tc) {
+                case ToolChoice.Auto => obj.put("tool_choice", JsonString("auto"))
+                case ToolChoice.Required => obj.put("tool_choice", JsonString("required"))
+                case ToolChoice.NoTool => obj.put("tool_choice", JsonString("none"))
+            }
             case None => ()
         }
 
         match (req.responseFormat) {
-            case Some(rf) =>
-                match (rf) {
-                    case ResponseFormat.JsonObject =>
-                        let rfObj = JsonObject()
-                        rfObj.put("type", JsonString("json_object"))
-                        obj.put("response_format", rfObj)
-                    case ResponseFormat.JsonSchema(name, schema) =>
-                        let rfObj = JsonObject()
-                        rfObj.put("type", JsonString("json_schema"))
-                        let jsObj = JsonObject()
-                        jsObj.put("name", JsonString(name))
-                        jsObj.put("strict", JsonBool(true))
-                        try { jsObj.put("schema", JsonValue.fromStr(schema)) } catch (_: Exception) { jsObj.put("schema", JsonObject()) }
-                        rfObj.put("json_schema", jsObj)
-                        obj.put("response_format", rfObj)
-                }
+            case Some(rf) => match (rf) {
+                case ResponseFormat.JsonObject =>
+                    let rfObj = JsonObject()
+                    rfObj.put("type", JsonString("json_object"))
+                    obj.put("response_format", rfObj)
+                case ResponseFormat.JsonSchema(name, schema) =>
+                    let rfObj = JsonObject()
+                    rfObj.put("type", JsonString("json_schema"))
+                    let jsObj = JsonObject()
+                    jsObj.put("name", JsonString(name))
+                    jsObj.put("strict", JsonBool(true))
+                    try {
+                        jsObj.put("schema", JsonValue.fromStr(schema))
+                    } catch (_: Exception) {
+                        jsObj.put("schema", JsonObject())
+                    }
+                    rfObj.put("json_schema", jsObj)
+                    obj.put("response_format", rfObj)
+            }
             case None => ()
         }
 
@@ -441,12 +510,12 @@ public class OpenAICompatProvider {
 
     private func shouldFallbackToJsonObject(req: ChatRequest, resp: ChatResponse): Bool {
         match (req.responseFormat) {
-            case Some(rf) =>
-                match (rf) {
-                    case ResponseFormat.JsonSchema(_, _) =>
-                        resp.finishReason.contains("response_format type is unavailable")
-                    case _ => false
-                }
+            case Some(rf) => match (rf) {
+                case ResponseFormat.JsonSchema(_, _) => resp
+                    .finishReason
+                    .contains("response_format type is unavailable")
+                case _ => false
+            }
             case None => false
         }
     }
@@ -454,10 +523,14 @@ public class OpenAICompatProvider {
     private func parseUsage(root: JsonObject): Usage {
         match (root.get("usage")) {
             case Some(uObj) =>
-                let u = uObj.asObject()
-                let input = jsonGetInt(u, "prompt_tokens", 0)
-                let output = jsonGetInt(u, "completion_tokens", 0)
-                Usage(input, output)
+                match (uObj.kind()) {
+                    case JsObject =>
+                        let u = uObj.asObject()
+                        let input = jsonGetInt(u, "prompt_tokens", 0)
+                        let output = jsonGetInt(u, "completion_tokens", 0)
+                        Usage(input, output)
+                    case _ => Usage.empty() // usage: null in streaming chunks
+                }
             case None => Usage.empty()
         }
     }
@@ -485,4 +558,117 @@ public class OpenAICompatProvider {
 
 public func createOpenAICompatProvider(apiKey: String, model: String): OpenAICompatProvider {
     OpenAICompatProvider("https://api.openai.com/v1", apiKey, model, 10, 60, 30)
+}
+
+func parseOpenAIChatCompletionResponse(body: String): ChatResponse {
+    try {
+        let root = JsonValue.fromStr(body).asObject()
+        let usage = parseOpenAIUsage(root)
+        var content = ""
+        var finishReason = ""
+        let toolCalls = ArrayList<ToolCall>()
+
+        match (root.get("choices")) {
+            case Some(cArrJv) =>
+                let choices = cArrJv.asArray()
+                if (choices.size() > 0) {
+                    match (choices.get(0)) {
+                        case Some(firstJv) =>
+                            let first = firstJv.asObject()
+                            finishReason = jsonGetString(first, "finish_reason", "")
+                            match (first.get("message")) {
+                                case Some(messageJv) =>
+                                    let message = messageJv.asObject()
+                                    content = jsonGetJsonContent(message, "content")
+                                    if (content.size == 0) {
+                                        content = jsonGetJsonContent(message, "parsed")
+                                    }
+                                    if (content.size == 0) {
+                                        content = jsonGetJsonContent(message, "refusal")
+                                    }
+                                    collectOpenAIMessageToolCalls(message, toolCalls)
+                                case None => content = jsonGetJsonContent(first, "text")
+                            }
+                        case None => ()
+                    }
+                }
+            case None => content = jsonGetJsonContent(root, "content")
+        }
+
+        var response = ChatResponse(content, if (finishReason.size > 0) {
+            finishReason
+        } else {
+            "stop"
+        }, usage)
+        for (i in 0..toolCalls.size) {
+            response.toolCalls.add(toolCalls[i])
+        }
+        response
+    } catch (_: Exception) {
+        ChatResponse(body, "stop", Usage.empty())
+    }
+}
+
+func collectOpenAIMessageToolCalls(message: JsonObject, toolCalls: ArrayList<ToolCall>): Unit {
+    match (message.get("tool_calls")) {
+        case Some(tcJv) =>
+            let tcArr = tcJv.asArray()
+            for (i in 0..tcArr.size()) {
+                match (tcArr.get(i)) {
+                    case Some(itemJv) =>
+                        let item = itemJv.asObject()
+                        let id = jsonGetString(item, "id", "")
+                        match (item.get("function")) {
+                            case Some(funcJv) =>
+                                let funcObj = funcJv.asObject()
+                                let name = jsonGetString(funcObj, "name", "")
+                                let args = jsonGetString(funcObj, "arguments", "")
+                                if (id.size > 0) {
+                                    toolCalls.add(ToolCall(id, name, args))
+                                }
+                            case None => ()
+                        }
+                    case None => ()
+                }
+            }
+        case None => ()
+    }
+
+    match (message.get("function_call")) {
+        case Some(funcJv) =>
+            let funcObj = funcJv.asObject()
+            let name = jsonGetString(funcObj, "name", "")
+            let args = jsonGetString(funcObj, "arguments", "")
+            if (name.size > 0) {
+                toolCalls.add(ToolCall("function_call", name, args))
+            }
+        case None => ()
+    }
+}
+
+func jsonGetJsonContent(obj: JsonObject, key: String): String {
+    match (obj.get(key)) {
+        case Some(jv) => match (jv.kind()) {
+            case JsString => jv.asString().getValue()
+            case JsObject => jv.asObject().toJsonString()
+            case JsArray => jv.asArray().toJsonString()
+            case _ => ""
+        }
+        case None => ""
+    }
+}
+
+func parseOpenAIUsage(root: JsonObject): Usage {
+    match (root.get("usage")) {
+        case Some(uObj) =>
+            match (uObj.kind()) {
+                case JsObject =>
+                    let u = uObj.asObject()
+                    let input = jsonGetInt(u, "prompt_tokens", 0)
+                    let output = jsonGetInt(u, "completion_tokens", 0)
+                    Usage(input, output)
+                case _ => Usage.empty()
+            }
+        case None => Usage.empty()
+    }
 }

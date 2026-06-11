@@ -22,6 +22,7 @@ func jsonGetInt(obj: JsonObject, key: String, default: Int64): Int64 {
     match (obj.get(key)) {
         case Some(jv) => match (jv.kind()) {
             case JsInt => jv.asInt().getValue();
+            case JsFloat => Int64(jv.asFloat().getValue());
             case _ => default
         }
         case None => default

@@ -36,7 +36,7 @@ public class RequestBuilder {
             for (i in 0..history.size) { req.messages.add(history[i]) }
         }
 
-        let schema = llmResponseSchema()
+        let schema = llmResponseSchemaForProvider(config.provider)
         if (config.provider == "anthropic") {
             setAnthropicStructuredOutput(req, "termhelper_response", schema)
         } else if (config.provider == "google") {
