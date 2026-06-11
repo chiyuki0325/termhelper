@@ -20,12 +20,16 @@ public class PtyTextBuffer {
     /// 追加 PTY 输出数据
     public func append(data: String): Unit {
         let bytes = data.toArray()
-        for (b in bytes) { raw.add(b) }
+        for (b in bytes) {
+            raw.add(b)
+        }
     }
 
     /// 追加原始字节
     public func appendBytes(bytes: Array<UInt8>): Unit {
-        for (b in bytes) { raw.add(b) }
+        for (b in bytes) {
+            raw.add(b)
+        }
     }
 
     /// 获取完整原始字节（供 Rust FFI 使用）
@@ -94,17 +98,27 @@ public class PtyLlmContextBuffer {
     public func append(data: String): Bool {
         let text = normalizer.feed(data)
         if (text.size > 0) {
-            for (b in text.toArray()) { normalized.add(b) }
-            if (normalized.size > compactThresholdBytes) { compact() }
+            for (b in text.toArray()) {
+                normalized.add(b)
+            }
+            if (normalized.size > compactThresholdBytes) {
+                compact()
+            }
         }
         text.size > 0 || normalizer.preview().size > 0
     }
 
     public func finishOpenLine(): Bool {
         let text = normalizer.flush()
-        if (text.size == 0) { return false }
-        for (b in text.toArray()) { normalized.add(b) }
-        if (normalized.size > compactThresholdBytes) { compact() }
+        if (text.size == 0) {
+            return false
+        }
+        for (b in text.toArray()) {
+            normalized.add(b)
+        }
+        if (normalized.size > compactThresholdBytes) {
+            compact()
+        }
         true
     }
 
@@ -148,29 +162,36 @@ public class PtyLlmContextBuffer {
         let recentBase = tailString(normalized, contextMaxBytes)
         let recent = appendPreview(recentBase, preview)
         let delta = appendPreview(deltaString(), preview)
-        let checkpoint = if (compactedPrefix.size > 0) { compactedPrefix } else { "No compacted history." }
-        PtyLlmContextSnapshot(
-            checkpoint,
-            recent,
-            delta,
-            checkpoint.size + recent.size + delta.size,
-            delta.size,
+        let checkpoint = if (compactedPrefix.size > 0) {
+            compactedPrefix
+        } else {
+            "No compacted history."
+        }
+        PtyLlmContextSnapshot(checkpoint, recent, delta, checkpoint.size + recent.size + delta.size, delta.size,
             compactCount)
     }
 
     private func deltaString(): String {
         if (lastSentOffset < baseOffset) {
             let text = tailString(normalized, contextMaxBytes)
-            if (text.size == 0) { return "[Output before this point was compacted.]" }
+            if (text.size == 0) {
+                return "[Output before this point was compacted.]"
+            }
             return "[Output before this point was compacted.]\n${text}"
         }
         let start = lastSentOffset - baseOffset
-        if (start >= normalized.size) { return "" }
+        if (start >= normalized.size) {
+            return ""
+        }
         bytesRangeToString(normalized, start, normalized.size)
     }
 
     private func compact(): Unit {
-        let keep = if (compactKeepBytes < normalized.size) { compactKeepBytes } else { normalized.size }
+        let keep = if (compactKeepBytes < normalized.size) {
+            compactKeepBytes
+        } else {
+            normalized.size
+        }
         let removeLen = normalized.size - keep
         let removed = bytesRangeToString(normalized, 0, removeLen)
         let tail = bytesRange(normalized, removeLen, normalized.size)
@@ -181,7 +202,9 @@ public class PtyLlmContextBuffer {
             compactedPrefix = compactedPrefix + "\n" + summary
         }
         baseOffset += removeLen
-        if (lastSentOffset < baseOffset) { lastSentOffset = baseOffset }
+        if (lastSentOffset < baseOffset) {
+            lastSentOffset = baseOffset
+        }
         normalized = tail
         compactCount += 1
     }
@@ -218,7 +241,9 @@ public class TerminalTextNormalizer {
     public func feed(data: String): String {
         output.clear()
         let bytes = data.toArray()
-        for (b in bytes) { processByte(b) }
+        for (b in bytes) {
+            processByte(b)
+        }
         safeUtf8(output.toArray())
     }
 
@@ -232,7 +257,9 @@ public class TerminalTextNormalizer {
 
     public func preview(): String {
         let text = trimRightAscii(safeUtf8(line.toArray()))
-        if (text.size == 0) { return "" }
+        if (text.size == 0) {
+            return ""
+        }
         if (lineWasOverwritten || progressUpdateCount > 1) {
             "[current progress latest: ${text}]"
         } else {
@@ -262,7 +289,9 @@ public class TerminalTextNormalizer {
         } else if (b == b'\n') {
             commitLine()
         } else if (b == b'\b') {
-            if (cursorCol > 0) { cursorCol -= 1 }
+            if (cursorCol > 0) {
+                cursorCol -= 1
+            }
             progressUpdateCount += 1
             lineWasOverwritten = true
         } else if (b == b'\t') {
@@ -277,13 +306,16 @@ public class TerminalTextNormalizer {
 
     private func writeUtf8Byte(b: UInt8): Unit {
         let advanceCursor = !isUtf8Continuation(b)
-        while (line.size < cursorCol) { line.add(b' ') }
-        if (advanceCursor && cursorCol < line.size && utf8SequenceLength(line[cursorCol]) > 0) {
-            removeUtf8SequenceAtCursor()
+        while (displayColumns(line) < cursorCol) {
+            line.add(b' ')
+        }
+        let byteIndex = byteIndexForColumn(line, cursorCol)
+        if (advanceCursor && byteIndex < line.size && utf8SequenceLength(line[byteIndex]) > 0) {
+            removeUtf8SequenceAtByteIndex(byteIndex)
         }
         if (advanceCursor) {
-            if (cursorCol < line.size) {
-                line[cursorCol] = b
+            if (byteIndex < line.size) {
+                line[byteIndex] = b
             } else {
                 line.add(b)
             }
@@ -293,9 +325,9 @@ public class TerminalTextNormalizer {
         }
     }
 
-    private func removeUtf8SequenceAtCursor(): Unit {
-        while (cursorCol + 1 < line.size && isUtf8Continuation(line[cursorCol + 1])) {
-            line.remove(at: cursorCol + 1)
+    private func removeUtf8SequenceAtByteIndex(byteIndex: Int64): Unit {
+        while (byteIndex + 1 < line.size && isUtf8Continuation(line[byteIndex + 1])) {
+            line.remove(at: byteIndex + 1)
         }
     }
 
@@ -315,23 +347,43 @@ public class TerminalTextNormalizer {
     }
 
     private func handleEscape(): Unit {
-        if (pendingEsc.size < 2) { return }
-        if (pendingEsc[1] != b'[') { return }
+        if (pendingEsc.size < 2) {
+            return
+        }
+        if (pendingEsc[1] != b'[') {
+            return
+        }
         let finalByte = pendingEsc[pendingEsc.size - 1]
         let param = firstAnsiParam(pendingEsc)
         if (finalByte == b'K') {
             handleEraseInLine(param)
         } else if (finalByte == b'G') {
-            cursorCol = if (param <= 1) { 0 } else { param - 1 }
+            cursorCol = if (param <= 1) {
+                0
+            } else {
+                param - 1
+            }
             progressUpdateCount += 1
             lineWasOverwritten = true
         } else if (finalByte == b'D') {
-            let n = if (param <= 0) { 1 } else { param }
-            cursorCol = if (cursorCol > n) { cursorCol - n } else { 0 }
+            let n = if (param <= 0) {
+                1
+            } else {
+                param
+            }
+            cursorCol = if (cursorCol > n) {
+                cursorCol - n
+            } else {
+                0
+            }
             progressUpdateCount += 1
             lineWasOverwritten = true
         } else if (finalByte == b'C') {
-            let n = if (param <= 0) { 1 } else { param }
+            let n = if (param <= 0) {
+                1
+            } else {
+                param
+            }
             cursorCol += n
             progressUpdateCount += 1
             lineWasOverwritten = true
@@ -362,7 +414,9 @@ public class TerminalTextNormalizer {
     }
 
     private func appendOutput(text: String): Unit {
-        for (b in text.toArray()) { output.add(b) }
+        for (b in text.toArray()) {
+            output.add(b)
+        }
     }
 }
 
@@ -377,15 +431,21 @@ func stripAnsiEscapes(bytes: Array<UInt8>): String {
             while (i < bytes.size && !((bytes[i] >= b'A' && bytes[i] <= b'Z') || (bytes[i] >= b'a' && bytes[i] <= b'z'))) {
                 i += 1
             }
-            if (i < bytes.size) { i += 1 }  // 跳过结尾字母
+            if (i < bytes.size) {
+                i += 1
+            } // 跳过结尾字母
         } else if (bytes[i] == 27 && i + 1 < bytes.size && bytes[i + 1] == b']') {
             // OSC 序列 (ESC])，以 BEL (\x07) 或 ST 结尾
             i += 2
             while (i < bytes.size && bytes[i] != 7 && bytes[i] != 27) {
                 i += 1
             }
-            if (i < bytes.size && bytes[i] == 27) { i += 1 } // ST (ESC\)
-            if (i < bytes.size) { i += 1 } // BEL
+            if (i < bytes.size && bytes[i] == 27) {
+                i += 1
+            } // ST (ESC\)
+            if (i < bytes.size) {
+                i += 1
+            } // BEL
         } else {
             result.add(bytes[i])
             i += 1
@@ -412,13 +472,25 @@ func firstAnsiParam(bytes: ArrayList<UInt8>): Int64 {
         }
         i += 1
     }
-    if (hasDigit) { result } else { 0 }
+    if (hasDigit) {
+        result
+    } else {
+        0
+    }
 }
 
 func bytesRange(bytes: ArrayList<UInt8>, start: Int64, end: Int64): ArrayList<UInt8> {
     let result = ArrayList<UInt8>()
-    var i = if (start < 0) { 0 } else { start }
-    let stop = if (end > bytes.size) { bytes.size } else { end }
+    var i = if (start < 0) {
+        0
+    } else {
+        start
+    }
+    let stop = if (end > bytes.size) {
+        bytes.size
+    } else {
+        end
+    }
     while (i < stop) {
         result.add(bytes[i])
         i += 1
@@ -431,13 +503,21 @@ func bytesRangeToString(bytes: ArrayList<UInt8>, start: Int64, end: Int64): Stri
 }
 
 func tailString(bytes: ArrayList<UInt8>, maxBytes: Int64): String {
-    let start = if (bytes.size > maxBytes) { bytes.size - maxBytes } else { 0 }
+    let start = if (bytes.size > maxBytes) {
+        bytes.size - maxBytes
+    } else {
+        0
+    }
     bytesRangeToString(bytes, start, bytes.size)
 }
 
 func appendPreview(text: String, preview: String): String {
-    if (preview.size == 0) { return text }
-    if (text.size == 0) { return preview }
+    if (preview.size == 0) {
+        return text
+    }
+    if (text.size == 0) {
+        return preview
+    }
     text + "\n" + preview
 }
 
@@ -463,7 +543,9 @@ func safeUtf8(bytes: Array<UInt8>): String {
                     }
                 }
                 if (valid) {
-                    for (j in 0..len) { result.add(bytes[i + j]) }
+                    for (j in 0..len) {
+                        result.add(bytes[i + j])
+                    }
                     i += len
                 } else {
                     appendReplacementRune(result)
@@ -491,6 +573,36 @@ func isUtf8Continuation(b: UInt8): Bool {
     b >= 0x80 && b <= 0xBF
 }
 
+func byteIndexForColumn(bytes: ArrayList<UInt8>, column: Int64): Int64 {
+    var idx: Int64 = 0
+    var col: Int64 = 0
+    while (idx < bytes.size && col < column) {
+        let len = utf8SequenceLength(bytes[idx])
+        idx += if (len > 0 && idx + len <= bytes.size) {
+            len
+        } else {
+            1
+        }
+        col += 1
+    }
+    idx
+}
+
+func displayColumns(bytes: ArrayList<UInt8>): Int64 {
+    var idx: Int64 = 0
+    var cols: Int64 = 0
+    while (idx < bytes.size) {
+        let len = utf8SequenceLength(bytes[idx])
+        idx += if (len > 0 && idx + len <= bytes.size) {
+            len
+        } else {
+            1
+        }
+        cols += 1
+    }
+    cols
+}
+
 func appendReplacementRune(result: ArrayList<UInt8>): Unit {
     result.add(0xEF)
     result.add(0xBF)
@@ -498,7 +610,9 @@ func appendReplacementRune(result: ArrayList<UInt8>): Unit {
 }
 
 func trimRightAscii(text: String): String {
-    if (text.size == 0) { return text }
+    if (text.size == 0) {
+        return text
+    }
     var end = text.size
     while (end > 0 && (text[end - 1] == b' ' || text[end - 1] == b'\t' || text[end - 1] == b'\r')) {
         end -= 1
@@ -511,17 +625,23 @@ func extractImportantLines(text: String, limit: Int64): String {
     let selected = ArrayList<String>()
     for (line in lines) {
         let trimmed = line.trimAscii()
-        if (trimmed.size == 0) { continue }
+        if (trimmed.size == 0) {
+            continue
+        }
         if (isImportantPtyLine(trimmed)) {
             selected.add(trimmed)
-            while (selected.size > limit) { selected.remove(at: 0) }
+            while (selected.size > limit) {
+                selected.remove(at: 0)
+            }
         }
     }
     if (selected.size == 0) {
         var i = lines.size - 1
         while (i >= 0 && selected.size < limit) {
             let trimmed = lines[i].trimAscii()
-            if (trimmed.size > 0) { selected.add(trimmed) }
+            if (trimmed.size > 0) {
+                selected.add(trimmed)
+            }
             i -= 1
         }
     }
@@ -530,16 +650,17 @@ func extractImportantLines(text: String, limit: Int64): String {
 
 func isImportantPtyLine(line: String): Bool {
     let lower = line.toAsciiLower()
-    lower.contains("error") || lower.contains("failed") || lower.contains("denied") ||
-        lower.contains("permission") || lower.contains("not found") || lower.contains("password") ||
-        lower.contains("[y/n]") || lower.contains("[y/n]") || lower.endsWith("?") || lower.endsWith(":") ||
-        lower.contains("progress updated")
+    lower.contains("error") || lower.contains("failed") || lower.contains("denied") || lower.contains("permission") ||
+        lower.contains("not found") || lower.contains("password") || lower.contains("[y/n]") || lower.contains("[y/n]") ||
+        lower.endsWith("?") || lower.endsWith(":") || lower.contains("progress updated")
 }
 
 func joinLines(lines: ArrayList<String>): String {
     var result = ""
     for (i in 0..lines.size) {
-        if (i > 0) { result += "\n" }
+        if (i > 0) {
+            result += "\n"
+        }
         result += lines[i]
     }
     result

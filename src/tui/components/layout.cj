@@ -73,6 +73,41 @@ public func trimToWidth(text: String, width: Int64): String {
     fitToWidth(text, width - 3) + "..."
 }
 
+/// Flatten untrusted overlay text into a bounded single line before it crosses
+/// the ratatui FFI boundary. Very long one-line spans can trigger coordinate
+/// overflow inside the renderer.
+public func compactOverlayText(text: String, maxRunes: Int64): String {
+    if (maxRunes <= 0) {
+        return ""
+    }
+    var count: Int64 = 0
+    let result = StringBuilder()
+    for (r in text.runes()) {
+        if (count >= maxRunes) {
+            result.append("...")
+            return result.toString()
+        }
+        if (r == r'\n' || r == r'\r' || r == r'\t') {
+            result.append(" ")
+        } else {
+            result.append(String(r))
+        }
+        count += 1
+    }
+    result.toString()
+}
+
+public func overlayValueLimit(width: Int64): Int64 {
+    let usable = if (width > 16) { width - 16 } else { 40 }
+    if (usable < 40) {
+        40
+    } else if (usable > 160) {
+        160
+    } else {
+        usable
+    }
+}
+
 public func wrapLine(text: String, width: Int64, indent: String): String {
     if (width <= 0 || displayWidth(text) <= width) {
         return text

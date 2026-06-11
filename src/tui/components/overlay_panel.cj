@@ -15,15 +15,15 @@ public func renderOverlayPanel(data: PtyOverlayData): String {
     out += "${uiText("overlay_mode")}: ${ptyModeText(data.mode)}  ${uiText("overlay_round")}: ${data.roundCount}/${data.maxRounds}\n"
     out += "${uiText("pty_tokens_used")}: ${formatTokenUsage(data.tokenInput, data.tokenOutput)}\n"
     match (data.llmDecision) {
-        case Some(v) => out += "${uiText("overlay_decision")}: ${v}\n"
+        case Some(v) => out += "${uiText("overlay_decision")}: ${compactOverlayText(v, overlayValueLimit(UI_WIDTH))}\n"
         case None => ()
     }
     match (data.pendingWrite) {
-        case Some(v) => out += "${uiText("overlay_pending_write")}: ${v}\n"
+        case Some(v) => out += "${uiText("overlay_pending_write")}: ${compactOverlayText(v, overlayValueLimit(UI_WIDTH))}\n"
         case None => ()
     }
     match (data.pendingReason) {
-        case Some(v) => out += "${uiText("overlay_reason")}: ${v}\n"
+        case Some(v) => out += "${uiText("overlay_reason")}: ${compactOverlayText(v, overlayValueLimit(UI_WIDTH))}\n"
         case None => ()
     }
     out
@@ -47,7 +47,7 @@ public func styledOverlayPanel(handle: Int64, data: PtyOverlayData, state: Strin
     match (data.llmDecision) {
         case Some(decision) =>
             richTextSpan(handle, "  ${uiText("overlay_decision")}: ", styleMuted())
-            richTextLine(handle, decision, styleInfo())
+            richTextLine(handle, compactOverlayText(decision, overlayValueLimit(UI_WIDTH)), styleInfo())
         case None => ()
     }
 
@@ -55,7 +55,7 @@ public func styledOverlayPanel(handle: Int64, data: PtyOverlayData, state: Strin
     match (data.pendingWrite) {
         case Some(content) =>
             richTextSpan(handle, "  ${uiText("overlay_pending_write")}: ", styleMuted())
-            richTextLine(handle, content, styleCommand())
+            richTextLine(handle, compactOverlayText(content, overlayValueLimit(UI_WIDTH)), styleCommand())
         case None => ()
     }
 
@@ -63,7 +63,7 @@ public func styledOverlayPanel(handle: Int64, data: PtyOverlayData, state: Strin
     match (data.pendingReason) {
         case Some(reason) =>
             richTextSpan(handle, "  ${uiText("overlay_reason")}: ", styleMuted())
-            richTextLine(handle, reason, styleDefault())
+            richTextLine(handle, compactOverlayText(reason, overlayValueLimit(UI_WIDTH)), styleDefault())
         case None => ()
     }
 }

@@ -1167,17 +1167,17 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
     richTextLine(handle)
 
     // LLM 决策信息
+    let overlayLimit = overlayValueLimit(state.terminalWidth)
     match (data.llmDecision) {
         case Some(d) =>
             richTextSpan(handle, "  ${uiText("overlay_decision")}: ", styleMuted())
-            richTextLine(handle, d, styleInfo())
+            richTextLine(handle, compactOverlayText(d, overlayLimit), styleInfo())
         case None => ()
     }
     match (data.pendingWrite) {
         case Some(content) =>
             richTextSpan(handle, "  ${uiText("overlay_pending_write")}: ", styleMuted())
-            let short = truncateRunes(content, 60)
-            richTextLine(handle, short, styleCommand())
+            richTextLine(handle, compactOverlayText(content, overlayLimit), styleCommand())
         case None => ()
     }
 
@@ -1195,7 +1195,7 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
         match (data.askUserQuestion) {
             case Some(question) =>
                 richTextSpan(handle, "  " + uiText("pty_llm_question") + ": ", styleMuted())
-                richTextLine(handle, question, styleInfo())
+                richTextLine(handle, compactOverlayText(question, overlayLimit), styleInfo())
             case None => ()
         }
         // 输入提示
@@ -1203,7 +1203,7 @@ func fillPtyOverlayWidget(handle: Int64, state: TuiAppState): Unit {
         richTextSpan(handle, "  " + label, styleInfo())
         // 输入框
         let displayInput = if (state.ptySensitiveInput) { ptyMaskedInput(state.ptyInput) } else { state.ptyInput }
-        richTextLine(handle, "  " + displayInput + "_", styleInput())
+        richTextLine(handle, "  " + compactOverlayText(displayInput, overlayLimit) + "_", styleInput())
         // 按钮 — 用户回答直接送入终端
         richTextSpan(handle, "  [Enter]${uiText("pty_send_to_terminal")} ", styleSuccess())
         richTextSpan(handle, "[Esc]${uiText("pty_cancel")}", styleErrorText())
