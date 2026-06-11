@@ -11,7 +11,7 @@ import termhelper.types.CommandResult
 // ═══════════════════════════════════════════════════════════════
 
 foreign func pipe(fds: CPointer<Int32>): Int32
-foreign func execve(path: CString, argv: CPointer<CPointer<Int8>>, envp: CPointer<CPointer<Int8>>): Int32
+foreign func execv(path: CString, argv: CPointer<CPointer<Int8>>): Int32
 
 let WNOHANG: Int32 = 1
 
@@ -201,7 +201,7 @@ func spawnInternal(command: String, timeoutMs: Int64, handle: ?SpawnHandle): Com
             argvBuf.write(2, CPointer<Int8>(cmdArg.getChars()))
             argvBuf.write(3, CPointer<Int8>())
 
-            execve(shellPath, argvBuf, CPointer<CPointer<Int8>>())
+            execv(shellPath, argvBuf)
             _exit(127)
         }
 
